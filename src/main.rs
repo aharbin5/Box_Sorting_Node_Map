@@ -1,4 +1,6 @@
 mod structs;
+use std::net::TcpListener;
+use std::io::Read;
 
 fn main() {
     // Real package Vector
@@ -74,12 +76,42 @@ fn main() {
     }*/
 
     // Prints from connections list source and destination
+
+    println!("Source Node\t->\tDestination Node");
     for i in 0 .. connections.len()
     {
-        println!("{} -> {}", connections[i].source_node, connections[i].destination_node);
+        println!("\t{}\t->\t{}", connections[i].source_node, connections[i].destination_node);
     }
 
     let route = [1,3,2,4,5,4,6,7,8,9,10];
     
+    // Wait for packet on port
+    let mut rx: String = "".to_string();
 
+    match TcpListener::bind("127.0.0.1:80")
+    {
+        Ok(t) => {
+            for stream in t.incoming()
+            {
+                match stream
+                {
+                    Ok(mut stream) => {
+                        match stream.read_to_string(&mut rx) // read_to_string could be used with a json parser or changed to read which gives a byte array
+                        {
+                            Ok(t) => {println!("{}", t); println!("{}", rx)},
+                            Err(e) => println!("Error occured at reading packet to buffer\n{}", e)
+                        }
+                        break;
+                    },
+                    Err(e) => println!("Error occured at match incoming\n{}", e)
+                }
+            }
+        },
+        Err(e) => println!("Error occured at TCP Bind\n{}", e)
+    }
 }
+
+// todo
+// 1. Make fn get_config() that does the whole TCP connect then JSON parses it
+// 2. Make fn route_sort() that takes in the BoxStructs on the shelves and assigns them places on the shelves
+// 3. Make async fn move_x and async fn move_y to simulate motor control
