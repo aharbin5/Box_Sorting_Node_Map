@@ -5,20 +5,21 @@ fn main() {
     let mut packages: Vec<structs::BoxStruct> = vec![];
 
     {   //////////////////////////////// Setup package list ////////////////////////////////
-        // xpos 0 - 1024
-        // ypos 0 - 1024
-        // 100 .. 110
+        // xpos 0 .. 1024
+        // ypos 0 .. 1024
+        // tracking number 100 .. 110
+        // destination 1 .. 9
         let temp_packages = [
-            [0, 10, 100],
-            [100, 50, 101],
-            [200, 120, 102],
-            [500, 320, 103],
-            [900, 390, 104],
-            [1024, 640, 105],
-            [152, 440, 106],
-            [30, 710, 107],
-            [770, 250, 108],
-            [690, 909, 109]
+            [0, 10, 100, 5],
+            [100, 50, 101, 1],
+            [200, 120, 102, 2],
+            [500, 320, 103, 7],
+            [900, 390, 104, 10],
+            [1024, 640, 105, 6],
+            [152, 440, 106, 8],
+            [30, 710, 107, 1],
+            [770, 250, 108, 8],
+            [690, 909, 109, 4]
         ];
 
         for i in 0..10
@@ -66,11 +67,13 @@ fn main() {
 
     }
 
-    for i in 0 .. packages.len()
+    // Prints package tracking numbers to verify loading into packages vector
+    /*for i in 0 .. packages.len()
     {
         println!("{}", packages[i].tracking_number);
-    }
+    }*/
 
+    // Prints from connections list source and destination
     for i in 0 .. connections.len()
     {
         println!("{} -> {}", connections[i].source_node, connections[i].destination_node);
