@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 local-ip-address = {version = "0.5.7"}
+serde_json = {version = "1.0.103"}
