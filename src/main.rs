@@ -1,6 +1,7 @@
 mod structs;
 use std::net::TcpListener;
 use std::io::Read;
+use local_ip_address::local_ip;
 
 fn main() {
     // Real package Vector
@@ -88,9 +89,17 @@ fn main() {
     // Wait for packet on port
     let mut rx: String = "".to_string();
 
-    match TcpListener::bind("127.0.0.1:80")
+    let my_local_ip_address: String = "127.0.0.1".to_string();
+    match local_ip()
+    {
+        Ok(t) => {let my_local_ip_address = t.to_string(); println!("Local address: {}", my_local_ip_address)},
+        Err(_e) => {println!("Couldn't get ip address correctly, resorting to loopback");}
+    }
+
+    match TcpListener::bind(my_local_ip_address + ":48753")
     {
         Ok(t) => {
+            println!("Address binded, waiting for connection");
             for stream in t.incoming()
             {
                 match stream
