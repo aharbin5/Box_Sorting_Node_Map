@@ -6,9 +6,9 @@ pub struct BoxStruct
     pub destination: i64
 }
 
-pub struct ConnectionStruct
+pub struct RouteStruct
 {
-    pub source_node: u32,
-    pub destination_node: u32,
-    pub weight: u32
+    pub destination_id: i64,
+    pub x_pos: i64,
+    pub y_pos: i64
 }

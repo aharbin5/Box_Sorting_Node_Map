@@ -46,57 +46,126 @@ fn get_config() -> serde_json::Value {
 
 fn main() {
     // Get config from network
-    let rx_config: Value = get_config();
+    //let rx_config: Value = get_config();
+    let rx_config: Value = serde_json::from_str(r#"
+    {"route": [
+        {"destination_id": 201, "x": 0, "y": 0}, 
+        {"destination_id": 202, "x": 10, "y": 0},
+        {"destination_id": 203, "x": 0, "y": 10},
+        {"destination_id": 204, "x": 10, "y": 10},
+        {"destination_id": 205, "x": 20, "y": 10}],
+    "box_loc": [
+        {"tracking_number": 101, "destination": 201},
+        {"tracking_number": 102, "destination": 201},
+        {"tracking_number": 103, "destination": 201},
+        {"tracking_number": 104, "destination": 202},
+        {"tracking_number": 105, "destination": 203},
+        {"tracking_number": 106, "destination": 204},
+        {"tracking_number": 107, "destination": 204},
+        {"tracking_number": 108, "destination": 204},
+        {"tracking_number": 109, "destination": 205}]}"#).unwrap();
 
     // Create Package Vector
     let mut packages: Vec<structs::BoxStruct> = vec![];
+    let mut route: Vec<structs::RouteStruct> = vec![];
 
     {
-        // Create temp package vector for sanitizing purposes
-        let mut temp_pack: Vec<structs::BoxStruct> = vec![];
+        // Create temp route vector for sanitizing purposes
+        let mut temp_route_id: Vec<i64> = vec![];
+        let mut temp_route_x: Vec<i64> = vec![];
+        let mut temp_route_y: Vec<i64> = vec![];
 
         for i in 0..5
         {
-            if rx_config["box_loc"][i]["tracking_number"].is_i64()
+            match rx_config["route"][i]["destination_id"].as_i64()
             {
-                // TODO: find out what type of variable the results of ^ are
-                // then convert it and push it to the package vector
-                // then we can actually start estimating times and finish the presentation
+                None => {println!("parser said fuck")},
+                Some(t) => {temp_route_id.push(t)}
+            }
+        }
+
+        for i in 0..5
+        {
+            match rx_config["route"][i]["x"].as_i64()
+            {
+                None => {println!("parser said fuck")},
+                Some(t) => {temp_route_x.push(t)}
+            }
+        }
+
+        for i in 0..5
+        {
+            match rx_config["route"][i]["y"].as_i64()
+            {
+                None => {println!("parser said fuck")},
+                Some(t) => {temp_route_y.push(t)}
+            }
+        }
+
+        for i in 0..5
+        {
+            route.push(structs::RouteStruct{
+                destination_id: temp_route_id[i],
+                x_pos: temp_route_x[i],
+                y_pos: temp_route_y[i]
+            });
+        }
+
+        // Create temp package vector for sanitizing purposes
+        let mut temp_pack: Vec<i64> = vec![];
+        let mut temp_dest: Vec<i64> = vec![];
+
+        for i in 0..9
+        {
+            match rx_config["box_loc"][i]["tracking_number"].as_i64()
+            {
+                None => {println!("parser said fuck")},
+                Some(t) => {temp_pack.push(t)}
+            }
+        }
+
+        for i in 0..9
+        {
+            match rx_config["box_loc"][i]["destination"].as_i64()
+            {
+                None => {println!("parser said fuck 2"); temp_dest.push(404)},
+                Some(t) => {temp_dest.push(t)}
             }
         }
 
         // Push network config to package vector
-        for i in 0..10
+        for i in 0..9
         {
             packages.push(structs::BoxStruct{
-                tracking_number: rx_config["box_loc"][i]["tracking_number"].as_i64().unwrap(),
-                destination: rx_config["box_loc"][i]["destination"].as_i64().unwrap(),
-                x_pos: i as u32,
-                y_pos: i as u32
+                tracking_number: temp_pack[i],
+                destination: temp_dest[i],
+                x_pos: i as u32 * 2,
+                y_pos: i as u32 * 2
             });
         }
 
-        /*for i in temp_pack
-        {
-            packages.push(structs::BoxStruct{
-                tracking_number: rx_config["box_loc"][i]["tracking_number"].as_i64().unwrap(),
-                destination: rx_config["box_loc"][i]["destination"].as_i64().unwrap(),
-                x_pos: i as u32,
-                y_pos: i as u32
-            });
-        }*/
+        // Get distance between boxes and estimate time to move
+        // 44 inches is the worst distance it would have to move divided by an estimated 3.5 in/s
+        // multiplied by the number of boxes needing to be moved
+        let time_taken: f64 = (44.0 / 1.0) * packages.len() as f64;
+
+        println!("Total time taken: {}s", time_taken);
+        // Estimate distances between stops and fine enough time
     }
+
+    // Speem: 44inch diagonal at 3.5in/s
+
     // Prints package tracking numbers to verify loading into packages vector
     for i in 0 .. packages.len()
     {
-        println!("{}", packages[i].tracking_number);
+        println!("TN: {} => {}", packages[i].tracking_number, packages[i].destination);
     }
     
-    // Get config JSON from network and apply settings
-    
-    // debug
-    //println!("{}", get_config()["route"]);
-
+    // Prints route information for debugging
+    for i in 0 .. route.len()
+    {
+        println!("{}", route[i].destination_id);
+    }
 }
 
 /*
