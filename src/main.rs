@@ -3,6 +3,15 @@ use std::net::TcpListener;
 use std::io::Read;
 use local_ip_address::local_ip;
 use serde_json::Value;
+use barcode_scanner::BarcodeScanner;
+
+fn read_barcode() -> Result<(), barcode_scanner::Error>
+{
+        let mut scanner = BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")?;
+        loop {
+                scanner.read()?
+        }
+}
 
 fn get_config() -> serde_json::Value {
     let my_local_ip_address: String = "127.0.0.1".to_string();
@@ -157,6 +166,19 @@ fn main() {
     {
         println!("{}", route[i].destination_id);
     }
+
+    // Create barcode scanner
+    match BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")
+    {
+        Ok(mut t) => {
+            match t.read()
+            {
+                Ok(t) => {println!("{}", t);},
+                Err(e) => {println!("Couldn't read: {}", e);}
+            }},
+        Err(e) => {println!("Couldn't find device: {}", e);}
+    }
+
 }
 
 /*
