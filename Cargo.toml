@@ -9,3 +9,9 @@ edition = "2021"
 local-ip-address = {version = "0.5.7"}
 serde_json = {version = "1.0.103"}
 barcode-scanner = "0.1.0"
+
+as5600 = "0.6.0"
+embedded-hal = "0.2"
+linux-embedded-hal = "0.3.2"
+rppal = "0.17.1"
+xca9548a = "0.2.1"

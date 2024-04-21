@@ -1,209 +1,166 @@
-mod structs;
-use std::net::TcpListener;
-use std::io::Read;
-use local_ip_address::local_ip;
-use serde_json::Value;
-use barcode_scanner::BarcodeScanner;
+use std::error::Error;
+use std::thread;
+use std::time::Duration;
+use rppal::gpio::Gpio;
+use rppal::pwm::*;
 
-fn read_barcode() -> Result<(), barcode_scanner::Error>
-{
-        let mut scanner = BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")?;
-        loop {
-                scanner.read()?
-        }
-}
+use linux_embedded_hal::I2cdev;
+use embedded_hal::blocking::i2c::{Read, Write, WriteRead};
+use xca9548a::{Xca9548a, SlaveAddr};
 
-fn get_config() -> serde_json::Value {
-    let my_local_ip_address: String = "127.0.0.1".to_string();
-    match local_ip()
-    {
-        Ok(t) => {let my_local_ip_address = t.to_string(); println!("Local address: {}", my_local_ip_address)},
-        Err(_e) => {println!("Couldn't get ip address correctly, resorting to loopback");}
-    }
-    
-    let mut rx: String = "".to_string();
+const horizontal_direction: u8 = 14;
+const forklift_direction: u8 = 4;
 
-    match TcpListener::bind("127.0.0.1".to_string() + ":48753")
-    {
-        Ok(t) => {
-            println!("Address binded, waiting for connection");
-            for stream in t.incoming()
-            {
-                match stream
-                {
-                    Ok(mut stream) => {
-                        match stream.read_to_string( &mut rx) // read_to_string could be used with a json parser or changed to read which gives a byte array
-                        {
-                            Ok(t) => {println!("Extracted JSON of size {} bytes", t)},
-                            Err(e) => println!("Error occured at reading packet to buffer\n{}", e)
-                        }
-                        break;
-                    },
-                    Err(e) => println!("Error occured at match incoming\n{}", e)
-                }
-            }
-        },
-        Err(e) => println!("Error occured at TCP Bind\n{}", e)
-    }
+use std::sync::mpsc;
 
-    match serde_json::from_str(&rx)
-    {
-        Ok(t) => {return t},
-        Err(e) => {println!("Error parsing JSON: {}", e); serde_json::from_str("error").unwrap()} // Semi-hack fix but it SHOULDN'T ever error.  Mint
-    }
-}
+use as5600::As5600;
 
 fn main() {
-    // Get config from network
-    let rx_config: Value = serde_json::from_str(r#"
-    {"route": [
-        {"destination_id": 201, "x": 0, "y": 0}, 
-        {"destination_id": 202, "x": 10, "y": 0},
-        {"destination_id": 203, "x": 0, "y": 10},
-        {"destination_id": 204, "x": 10, "y": 10},
-        {"destination_id": 205, "x": 20, "y": 10}],
-    "box_loc": [
-        {"tracking_number": 101, "destination": 201},
-        {"tracking_number": 102, "destination": 201},
-        {"tracking_number": 103, "destination": 201},
-        {"tracking_number": 104, "destination": 202},
-        {"tracking_number": 105, "destination": 203},
-        {"tracking_number": 106, "destination": 204},
-        {"tracking_number": 107, "destination": 204},
-        {"tracking_number": 108, "destination": 204},
-        {"tracking_number": 109, "destination": 205}]}"#).unwrap();
+    let (main_tx, main_rx) = mpsc::channel();
+    let (thread_tx, thread_rx) = mpsc::channel();
+    let gpio = Gpio::new().unwrap();
+    let mut direction_pin = gpio.get(horizontal_direction).unwrap().into_output();
+    let mut forklift_gpio = gpio.get(forklift_direction).unwrap().into_output();
 
-    let rx_config: Value = get_config();
+    let splitter = I2cdev::new("/dev/i2c-1").unwrap();
+    let address = SlaveAddr::default();
+    let i2c_switch = Xca9548a::new(splitter, address);
+    let parts = i2c_switch.split();
+    //let horizontal_i2c = parts.i2c0;
+    let forklift_i2c = parts.i2c1;
 
-    // Create Package Vector
-    let mut packages: Vec<structs::BoxStruct> = vec![];
-    let mut route: Vec<structs::RouteStruct> = vec![];
+    //let i2c = I2cdev::new("/dev/i2c-1").unwrap(); // set encoder on default bus
+    let mut horizontal_encoder = As5600::new(I2cdev::new("/dev/i2c-0").unwrap());
+    println!("Horizontal: {:?}", horizontal_encoder.config().unwrap());
 
+    let mut forklift_encoder = As5600::new(forklift_i2c);
+    println!("Forklift: {:?}", forklift_encoder.config().unwrap());
+
+    let mut total_rotations: i32 = 0;
+
+    let mut current_quadrant = 1;
+    let mut previous_quadrant = 1;
+
+    let _ = main_tx.send([0,1]).unwrap();
+
+    let mut current_position: i32 = 0;
+
+    let pwm_thread = thread::spawn(move ||
     {
-        // Create temp route vector for sanitizing purposes
-        let mut temp_route_id: Vec<i64> = vec![];
-        let mut temp_route_x: Vec<i64> = vec![];
-        let mut temp_route_y: Vec<i64> = vec![];
+	let mut target_position: i32;
+        let pwm = rppal::pwm::Pwm::with_frequency(Channel::Pwm0, 3200 as f64, 0.25, Polarity::Normal, false).unwrap();
+	println!("thread spawned and pwm set false");
 
-        for i in 0..5
-        {
-            match rx_config["route"][i]["destination_id"].as_i64()
-            {
-                None => {println!("parser said fuck")},
-                Some(t) => {temp_route_id.push(t)}
-            }
-        }
+        let initial_angle: i32 = horizontal_encoder.angle().unwrap() as i32;
 
-        for i in 0..5
-        {
-            match rx_config["route"][i]["x"].as_i64()
-            {
-                None => {println!("parser said fuck")},
-                Some(t) => {temp_route_x.push(t)}
-            }
-        }
-
-        for i in 0..5
-        {
-            match rx_config["route"][i]["y"].as_i64()
-            {
-                None => {println!("parser said fuck")},
-                Some(t) => {temp_route_y.push(t)}
-            }
-        }
-
-        for i in 0..5
-        {
-            route.push(structs::RouteStruct{
-                destination_id: temp_route_id[i],
-                x_pos: temp_route_x[i],
-                y_pos: temp_route_y[i]
-            });
-        }
-
-        // Create temp package vector for sanitizing purposes
-        let mut temp_pack: Vec<i64> = vec![];
-        let mut temp_dest: Vec<i64> = vec![];
-
-        for i in 0..9
-        {
-            match rx_config["box_loc"][i]["tracking_number"].as_i64()
-            {
-                None => {println!("parser said fuck")},
-                Some(t) => {temp_pack.push(t)}
-            }
-        }
-
-        for i in 0..9
-        {
-            match rx_config["box_loc"][i]["destination"].as_i64()
-            {
-                None => {println!("parser said fuck 2"); temp_dest.push(404)},
-                Some(t) => {temp_dest.push(t)}
-            }
-        }
-
-        // Push network config to package vector
-        for i in 0..9
-        {
-            packages.push(structs::BoxStruct{
-                tracking_number: temp_pack[i],
-                destination: temp_dest[i],
-                x_pos: i as u32 * 2,
-                y_pos: i as u32 * 2
-            });
-        }
-    }
-
-    // Prints package tracking numbers to verify loading into packages vector
-    for i in 0 .. packages.len()
-    {
-        println!("TN: {} => {}", packages[i].tracking_number, packages[i].destination);
-    }
+        loop {
+		println!("top of loop");
+		let status = main_rx.recv().unwrap();
+		if status[0] == 0 && status[1] == 1 {
+			let _ = pwm.disable();
+			println!("disabled for now");
+		} 
+		else if status[0] == 0 && status[1] == 2 {
+			let _ = pwm.enable();
+			let target_position = main_rx.recv().unwrap()[1] - initial_angle; // enter posiiton
+			println!("enabled with target: {}", target_position);
+			loop {
+				let raw_angle = horizontal_encoder.angle().unwrap() as i32;
+			        let polar_angle: f32 = ((raw_angle as f32 / 4096.0) * 360.0) as f32; // For display purposes ONLY
+			        previous_quadrant = current_quadrant;
+			        current_quadrant = match raw_angle {
+			                0 ..= 1024 => {1},
+			                1025 ..= 2048 => {4},
+			                2049 ..= 3072 => {3},
+			                3073 ..= 4096 => {2},
+			                _ => {println!("could not find quadrant"); -1}
+        			};
+			        if previous_quadrant == 1 && current_quadrant == 2 {total_rotations -= 1;}
+			        else if previous_quadrant == 2 && current_quadrant == 1 {total_rotations += 1;}
+				current_position = (total_rotations * 4096) + raw_angle as i32 - initial_angle;
+			        //println!("{:?}\t|\t{:?}\tTotal Angle: {}", polar_angle, current_quadrant, current_position);
+				thread::sleep(Duration::from_millis(10));
+				if current_position < target_position + 50 && current_position > target_position - 50 {
+					println!("hit target: current {} ~ target {}", current_position, target_position);
+					let _ = pwm.disable();
+					break;
+			        } else if current_position < target_position {
+					direction_pin.set_high();
+					if !pwm.is_enabled().unwrap() {
+						let _ = pwm.enable();
+					}
+				} else if current_position > target_position {
+					direction_pin.set_low();
+					if !pwm.is_enabled().unwrap() {
+						let _ = pwm.enable();
+					}
+				}
+			}
+		}
+		else if status[0] == 0 && status[1] == 0 {
+			let _ = pwm.disable();
+			println!("thread disabled and killed");
+			break;
+		}
+		else if status[1] == 1 {
+			let _ = thread_tx.send([1,0]).unwrap();
+		}
+	}
+    });
+    //thread::sleep(Duration::from_secs(1));	// TODO
+    let _ = main_tx.send([0, 2]);
+    println!("sent enable");
+    thread::sleep(Duration::from_millis(10));
+    let _ = main_tx.send([4, -8192]);
+    println!("sent target position and waiting 5s");
+    thread::sleep(Duration::from_secs(5));
     
-    // Prints route information for debugging
-    for i in 0 .. route.len()
-    {
-        println!("{}", route[i].destination_id);
+    let pwm2 = rppal::pwm::Pwm::with_frequency(Channel::Pwm1, 3200 as f64, 0.25, Polarity::Normal, false).unwrap();
+    forklift_gpio.set_low();
+    let _ = pwm2.enable();
+    thread::sleep(Duration::from_secs(2));
+    forklift_gpio.set_high();
+    thread::sleep(Duration::from_secs(2));
+    let _ = pwm2.disable();
+
+    let _ = main_tx.send([0, 2]);
+    thread::sleep(Duration::from_millis(10));
+    let _ = main_tx.send([4, 0]);
+    thread::sleep(Duration::from_secs(5));
+
+    forklift_gpio.set_low();
+    let _ = pwm2.enable();
+    thread::sleep(Duration::from_secs(1));
+    let mut counter = 0;
+    loop {
+	if counter > 75 {break;}
+        forklift_gpio.set_high();
+        thread::sleep(Duration::from_millis(20));
+        forklift_gpio.set_low();
+        thread::sleep(Duration::from_millis(20));
+	counter += 1;
     }
+    let _ = pwm2.disable();
 
-    // Create barcode scanner
-    match BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")
-    {
-        Ok(mut t) => {
-            match t.read()
-            {
-                Ok(t) => {println!("{}", t);},
-                Err(e) => {println!("Couldn't read: {}", e);}
-            }},
-        Err(e) => {println!("Couldn't find device: {}", e);}
-    }
+    forklift_gpio.set_high();
+    let _ = pwm2.enable();
+    thread::sleep(Duration::from_secs(1));
+    let _ = pwm2.disable();
 
+
+    /*println!("send target2 position and wait 5s");
+    let _ = main_tx.send([0, 2]);
+    thread::sleep(Duration::from_millis(10));
+    let _ = main_tx.send([4, 0]);
+    thread::sleep(Duration::from_secs(5));*/
+    
+
+    println!("send kill");
+    let _ = main_tx.send([0, 0]);
+    //let _ = tx.send(true).unwrap();		// TODO
+    //thread::sleep(Duration::from_secs(10));	// TODO
+    //let _ = tx.send(false);			// TODO
+    //pwm_thread.join().unwrap();		// TODO
+    pwm_thread.join().unwrap();
+    println!("joined and finish"); 
 }
-
-/*
-todo
-1. Make fn route_sort() that takes in the BoxStructs on the shelves and assigns them places on the shelves
-2. Make async fn move_x and async fn move_y to simulate motor control
- 
-1. Take in full route and boxmap from ethernet
-2. Sort route from set map
-3. Post location on Google map embedded in website
-4. Time to move from one box location to another (appox 2"/s)
- 
-JSON:
-{
-    "route": [{"destination_id": 20x,"x": x, "y": y}, {"destination_id": 20x,"x": x, "y": y}, ...],
-    "box_loc": [{"box_index": x1, "route_stop": route[x1]}, {"box_index": x1, "route_stop": route[x1]}],
-}
-
-
-- Initialize motors and encoders
-- Set motors to safe spot
-- Check for door switch and disable until off
-- Ask network for box map and route if updated version is not stored
-- Get route and box dropoff locations from the network JSON
-- Scan shelf for physical box locations
-- 
-
-*/
