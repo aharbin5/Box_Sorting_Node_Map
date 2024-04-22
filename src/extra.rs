@@ -1,16 +1,59 @@
-mod structs;
 use std::net::TcpListener;
 use std::io::Read;
 use local_ip_address::local_ip;
+use rppal::pwm::Pwm;
 use serde_json::Value;
 use barcode_scanner::BarcodeScanner;
+use std::sync::mpsc;
 
+pub fn move_horizontal(send_channel: &mpsc::Sender<[i32; 2]>, target_value: i32) {
+    let _ = send_channel.send([0,2]); // Send enable
+    thread::sleep(Duration::from_millis(10)); // Make sure the thread gets it
+    let _ = main_tx.send([4, -8192]); // Send target position
+}
+
+pub fn load_box(forklift_pwm: rppal::pwm::Pwm) {
+    let _ = forklift_pwm.disable();
+    forklift_gpio.set_low();
+    let _ = forklift_pwm.enable();
+    thread::sleep(Duration::from_secs(2));
+    forklift_gpio.set_high();
+    thread::sleep(Duration::from_secs(2));
+    let _ = forklift_pwm.disable();
+}
+
+pub fn unload_box() {
+    TODO!();
+    /* 
+        This function needs to home the robot to the pedestal
+        then move up so it goes over the lip then drops down
+        so it can pull off and leave the box
+        Can't do that until we make the pedestal
+     */
+}
+
+// TODO v
 fn read_barcode() -> Result<(), barcode_scanner::Error>
 {
         let mut scanner = BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")?;
         loop {
                 scanner.read()?
         }
+}
+
+pub struct BoxStruct
+{
+    pub x_pos: u32,
+    pub y_pos: u32,
+    pub tracking_number: i64,
+    pub destination: i64
+}
+
+pub struct RouteStruct
+{
+    pub destination_id: i64,
+    pub x_pos: i64,
+    pub y_pos: i64
 }
 
 fn get_config() -> serde_json::Value {
