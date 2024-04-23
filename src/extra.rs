@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::thread;
 use as5600::As5600;
 
-pub fn goto_shelf(shelf_number: i32, encoder: As5600<>) {
+pub fn goto_shelf(shelf_number: i32, encoder: As5600<I2cSlave<{error}, Xca9548a<{unknown}>, {unknown}>>) {
     const VERTICAL_DIRECTION: u8 = 15;
 
     let mut vertical_pwm = rppal::pwm::Pwm::with_frequency(Channel::Pwm1, 3200 as f64, 0.25, Polarity::Normal, false).unwrap();
@@ -45,7 +45,7 @@ pub fn unload_box(forklift_pwm: &mut rppal::pwm::Pwm, forklift_gpio: &mut rppal:
      */
 }
 
-pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<>) {
+pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<{error}, Xca9548a<{unknown}>, {unknown}>>) {
     forklift_pwm.set_low();
     forklift_gpio.set_low();
     // Low direction goes in the shelf
@@ -55,7 +55,7 @@ pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_gpio: &mut r
     pwm_target(0, initial_angle, forklift_pwm, forklift_gpio, encoder);
 }
 
-fn pwm_target(target_position: i32, initial_angle: i32, forklift_pwm: &mut rppal::gpio::OutputPin, forklift_gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<>) {
+fn pwm_target(target_position: i32, initial_angle: i32, forklift_pwm: &mut rppal::gpio::OutputPin, forklift_gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<{error}, Xca9548a<{unknown}>, {unknown}>>) {
     let mut total_rotations: i32 = 0;
     let mut current_quadrant = 1;
     let mut previous_quadrant = 1;
