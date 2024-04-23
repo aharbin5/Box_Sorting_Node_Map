@@ -11,7 +11,7 @@ use embedded_hal::blocking::i2c::{Read, Write, WriteRead};
 use xca9548a::{Xca9548a, SlaveAddr};
 
 const HORIZONTAL_DIRECTION: u8 = 14;
-const VERTICAL_DIRECTION: u8 = 15;
+//const VERTICAL_DIRECTION: u8 = 15;
 const SPREADER_DIRECTION: u8 = 23;
 const FORKLIFT_DIRECTION: u8 = 24;
 
@@ -46,7 +46,7 @@ fn main() {
     */
     let gpio = Gpio::new().unwrap();
     let mut horizontal_gpio = gpio.get(HORIZONTAL_DIRECTION).unwrap().into_output();
-    let mut vertical_gpio = gpio.get(VERTICAL_DIRECTION).unwrap().into_output();
+    //let mut vertical_gpio = gpio.get(VERTICAL_DIRECTION).unwrap().into_output();
     let mut forklift_gpio = gpio.get(FORKLIFT_DIRECTION).unwrap().into_output();
     let mut spreader_gpio = gpio.get(SPREADER_DIRECTION).unwrap().into_output();
 
@@ -186,9 +186,9 @@ fn main() {
     // This should be used for the real barcode scanner code, just saving it here for now
     /*while let Ok(i) = scanner_rx.try_recv() {
 	    println!("{}", i);
-    }*/
+    }
 
-    scanner_thread.join().unwrap();
+    scanner_thread.join().unwrap();*/
 
     // Move robot to -8192 and wait 5s
     extra::move_horizontal(&main_tx, -8192);
@@ -200,18 +200,20 @@ fn main() {
         }
         else {break;}
     }
-    
-    // Initialize vertical_pwm
-    let mut vertial_pwm = rppal::pwm::Pwm::with_frequency(Channel::Pwm1, 3200 as f64, 0.25, Polarity::Normal, false).unwrap();
 
     // Initialize forklift_pwm and load a box in the current position
     extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder);
+
+    extra::goto_shelf(1, vertical_encoder);
+
+    println!("Sleeping 5s for safety");
+    thread::sleep(Duration::from_secs(5));
 
     // Move robot to 0 and wait 1s
     extra::move_horizontal(&main_tx, 0);
     thread::sleep(Duration::from_secs(1));
 
-    // Stupid vibrate function
+    /*// Stupid vibrate function
     forklift_gpio.set_low();
     let _ = forklift_pwm.enable();
     thread::sleep(Duration::from_secs(1));
@@ -229,7 +231,7 @@ fn main() {
     forklift_gpio.set_high();
     let _ = forklift_pwm.enable();
     thread::sleep(Duration::from_secs(1));
-    let _ = forklift_pwm.disable();
+    let _ = forklift_pwm.disable();*/
 
     // Wrap things up by killing the thread
     println!("send kill");
