@@ -7,6 +7,7 @@ use barcode_scanner::BarcodeScanner;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::thread;
+use as5600::As5600;
 
 pub fn move_horizontal(send_channel: &mpsc::Sender<[i32; 2]>, target_value: i32) {
     let _ = send_channel.send([0,2]); // Send enable
@@ -14,19 +15,22 @@ pub fn move_horizontal(send_channel: &mpsc::Sender<[i32; 2]>, target_value: i32)
     let _ = send_channel.send([4, -8192]); // Send target position
 }
 
-pub fn load_box(forklift_pwm: &mut rppal::pwm::Pwm, forklift_gpio: &mut rppal::gpio::OutputPin) {
-    let _ = forklift_pwm.disable();
+pub fn load_box(pwm: &mut rppal::gpio::OutputPin, gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<>) {
+    // Low direction goes in the shelf
+    // High direction comes out of the shelf
+
+    // TODO: Experimentally find distance to go in
+    // TODO2: Write software PWM loop
+    forklift_pwm.set_low();
     forklift_gpio.set_low();
-    let _ = forklift_pwm.enable();
-    thread::sleep(Duration::from_secs(2));
-    forklift_gpio.set_high();
-    thread::sleep(Duration::from_secs(2));
-    let _ = forklift_pwm.disable();
+    loop {
+        todo!();
+    }
 }
 
-pub fn unload_box() {
+pub fn unload_box(forklift_pwm: &mut rppal::pwm::Pwm, forklift_gpio: &mut rppal::gpio::OutputPin) {
     /*   
- 	TODO!();
+        TODO
         This function needs to home the robot to the pedestal
         then move up so it goes over the lip then drops down
         so it can pull off and leave the box
@@ -34,7 +38,7 @@ pub fn unload_box() {
      */
 }
 
-fn read_barcode() -> String
+fn read_barcode() -> String // Depricated
 {
 	match BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")
 	{
