@@ -5,14 +5,16 @@ use rppal::pwm::Pwm;
 use serde_json::Value;
 use barcode_scanner::BarcodeScanner;
 use std::sync::mpsc;
+use std::time::Duration;
+use std::thread;
 
 pub fn move_horizontal(send_channel: &mpsc::Sender<[i32; 2]>, target_value: i32) {
     let _ = send_channel.send([0,2]); // Send enable
     thread::sleep(Duration::from_millis(10)); // Make sure the thread gets it
-    let _ = main_tx.send([4, -8192]); // Send target position
+    let _ = send_channel.send([4, -8192]); // Send target position
 }
 
-pub fn load_box(forklift_pwm: rppal::pwm::Pwm) {
+pub fn load_box(forklift_pwm: &mut rppal::pwm::Pwm, forklift_gpio: &mut rppal::gpio::OutputPin) {
     let _ = forklift_pwm.disable();
     forklift_gpio.set_low();
     let _ = forklift_pwm.enable();
@@ -23,8 +25,8 @@ pub fn load_box(forklift_pwm: rppal::pwm::Pwm) {
 }
 
 pub fn unload_box() {
-    TODO!();
-    /* 
+    /*   
+ 	TODO!();
         This function needs to home the robot to the pedestal
         then move up so it goes over the lip then drops down
         so it can pull off and leave the box
@@ -32,13 +34,17 @@ pub fn unload_box() {
      */
 }
 
-// TODO v
-fn read_barcode() -> Result<(), barcode_scanner::Error>
+fn read_barcode() -> String
 {
-        let mut scanner = BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")?;
-        loop {
-                scanner.read()?
-        }
+	match BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")
+	{
+		Ok(mut t) => {match t.read() {
+			Ok(t2) => {t2},
+			Err(e) => {"couldn't read".to_string()}
+			}
+		},
+		Err(e) => {"could not find device".to_string()}
+	}
 }
 
 pub struct BoxStruct
@@ -95,7 +101,7 @@ fn get_config() -> serde_json::Value {
         Err(e) => {println!("Error parsing JSON: {}", e); serde_json::from_str("error").unwrap()} // Semi-hack fix but it SHOULDN'T ever error.  Mint
     }
 }
-
+/*
 fn old_main() {
     // Get config from network
     let rx_config: Value = serde_json::from_str(r#"
@@ -106,18 +112,18 @@ fn old_main() {
         {"destination_id": 204, "x": 10, "y": 10},
         {"destination_id": 205, "x": 20, "y": 10}],
     "box_loc": [
-        {"tracking_number": 0401, "destination": 201},
-        {"tracking_number": 0402, "destination": 201},
-        {"tracking_number": 0403, "destination": 201},
-        {"tracking_number": 0404, "destination": 202},
-        {"tracking_number": 0601, "destination": 203},
-        {"tracking_number": 0602, "destination": 203},
-        {"tracking_number": 0603, "destination": 204},
-        {"tracking_number": 0604, "destination": 204},
-        {"tracking_number": 0801, "destination": 204},
-        {"tracking_number": 0802, "destination": 204},
-        {"tracking_number": 0803, "destination": 205},
-        {"tracking_number": 0804, "destination": 205}]}"#).unwrap();
+        {"tracking_number": 04001, "destination": 201},
+        {"tracking_number": 04002, "destination": 201},
+        {"tracking_number": 04003, "destination": 201},
+        {"tracking_number": 04004, "destination": 202},
+        {"tracking_number": 06005, "destination": 203},
+        {"tracking_number": 06006, "destination": 203},
+        {"tracking_number": 06007, "destination": 204},
+        {"tracking_number": 06008, "destination": 204},
+        {"tracking_number": 08009, "destination": 204},
+        {"tracking_number": 08010, "destination": 204},
+        {"tracking_number": 08011, "destination": 205},
+        {"tracking_number": 08012, "destination": 205}]}"#).unwrap();
 
     let rx_config: Value = get_config();
 
@@ -226,7 +232,7 @@ fn old_main() {
     }
 
 }
-
+*/
 /*
 todo
 1. Make fn route_sort() that takes in the BoxStructs on the shelves and assigns them places on the shelves

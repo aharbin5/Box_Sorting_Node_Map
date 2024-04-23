@@ -3,6 +3,7 @@ use std::thread;
 use std::time::Duration;
 use rppal::gpio::Gpio;
 use rppal::pwm::*;
+use barcode_scanner::BarcodeScanner;
 mod extra;
 
 use linux_embedded_hal::I2cdev;
@@ -21,6 +22,7 @@ use as5600::As5600;
 fn main() {
     let (main_tx, main_rx) = mpsc::channel();
     let (thread_tx, thread_rx) = mpsc::channel();
+    let (scanner_tx, scanner_rx) = mpsc::channel::<String>();
     /* 
         #### Main mpsc Status Guide ####
         Bit 0 - Code
@@ -52,9 +54,11 @@ fn main() {
     //let i2c = I2cdev::new("/dev/i2c-1").unwrap(); // set encoder on default bus
     let mut horizontal_encoder = As5600::new(I2cdev::new("/dev/i2c-0").unwrap());
     println!("Horizontal: {:?}", horizontal_encoder.config().unwrap());
+    println!("Encoder read: {:?}", horizontal_encoder.angle().unwrap());
 
     let mut forklift_encoder = As5600::new(forklift_i2c);
     println!("Forklift: {:?}", forklift_encoder.config().unwrap());
+    println!("Encoder read: {:?}", forklift_encoder.angle().unwrap());
 
     let mut total_rotations: i32 = 0;
 
@@ -65,6 +69,7 @@ fn main() {
 
     let mut current_position: i32 = 0;
 
+    // PWM Thread Init
     let pwm_thread = thread::spawn(move ||
     {
 	let mut target_position: i32;
@@ -130,13 +135,47 @@ fn main() {
 	}
     });
 
+    // Barcode Scanner Thread Init
+    let scanner_thread = thread::spawn(move ||
+    {
+	let mut scanned_counter = 0;
+	match BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")
+        {
+                Ok(mut t) => {
+			while scanned_counter < 10 {
+				match t.read() {
+                       		Ok(t2) => {
+					match t2.parse::<i32>().unwrap() {
+						999..=8999 => {let _ = scanner_tx.send(t2).unwrap();},
+						_ => {println!("who knows what was scanned");}, // change later to be more useful
+					}
+					scanned_counter += 1;},
+                        	Err(e) => {println!("couldn't read"); scanned_counter = 100;}
+                        	}
+			}
+                },
+                Err(e) => {println!("could not find device");}
+        }
+    });
+
+    println!("thread is waiting 10s, scan fast");
+    thread::sleep(Duration::from_secs(10));
+
+    while let Ok(i) = scanner_rx.try_recv() {
+	println!("{}", i);
+    }
+
+    println!("we finished the list boys");
+
+    scanner_thread.join().unwrap();
+/*
     // Move robot to -8192 and wait 5s
     extra::move_horizontal(&main_tx, -8192);
     thread::sleep(Duration::from_secs(5)); // Change this to read the thread_rx to know when to move
     
     // Initialize forklift_pwm and load a box in the current position
-    let forklift_pwm = rppal::pwm::Pwm::with_frequency(Channel::Pwm1, 3200 as f64, 0.25, Polarity::Normal, false).unwrap();
-    extra::load_box(forklift_pwm);
+    let mut forklift_pwm = rppal::pwm::Pwm::with_frequency(Channel::Pwm1, 3200 as f64, 0.25, Polarity::Normal, false).unwrap();
+    extra::load_box(&mut forklift_pwm, &mut forklift_gpio);
 
     // Move robot to 0 and wait 1s
     extra::move_horizontal(&main_tx, 0);
@@ -161,7 +200,7 @@ fn main() {
     let _ = forklift_pwm.enable();
     thread::sleep(Duration::from_secs(1));
     let _ = forklift_pwm.disable();
-
+*/
     // Wrap things up by killing the thread
     println!("send kill");
     let _ = main_tx.send([0, 0]);
