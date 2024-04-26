@@ -166,12 +166,14 @@ fn main() {
     let scanner_thread = thread::spawn(move ||
     {
 	let mut scanned_counter = 0;
+    let string_thing: String;
 	match BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")
         {
                 Ok(mut t) => {
 			loop {
 				match t.read() {
-                       		Ok(t2) => {
+                    Ok(t2) => {
+                    let string_thing = t2.split_at(t2.len()-1)[0];
 					match t2.pop().parse::<i32>().unwrap() {
 						999..=8999 => {let _ = scanner_tx.send(t2.pop().parse::<i32>().unwrap());},
 						_ => {println!("Something weird was scanned, breaking"); break;},
@@ -186,7 +188,7 @@ fn main() {
     });
 
     // Package list to add to while scanning shelves
-    let mut packages: Vec<structs::BoxStruct> = vec![];
+    let mut packages: Vec<extra::BoxStruct> = vec![];
 
     let mut current_shelf = extra::goto_shelf(1, vertical_encoder);
 
