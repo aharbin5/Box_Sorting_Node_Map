@@ -15,7 +15,7 @@ use linux_embedded_hal::I2cdev;
 use xca9548a::I2cSlave;
 use xca9548a::Xca9548a;
 
-pub fn goto_shelf(shelf_number: i32, encoder: As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) {
+pub fn goto_shelf(shelf_number: i32, encoder: As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) -> i32 {
     const VERTICAL_DIRECTION: u8 = 15;
     const VERTICAL_GPIO: u8 = 13;
 
@@ -28,12 +28,14 @@ pub fn goto_shelf(shelf_number: i32, encoder: As5600<I2cSlave<'_, Xca9548a<I2cde
         let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
         thread::sleep(Duration::from_secs(2));
         let _ = vertical_pwm.clear_pwm();
+        0
     } else if shelf_number == 1 {
         vertical_dir.set_low();
         let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
         thread::sleep(Duration::from_secs(2));
         let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
-    }
+        1
+    } else {println!("not a valid shelf, yet"); -1}
 }
 
 pub fn move_horizontal(send_channel: &mpsc::Sender<[i32; 2]>, target_value: i32) {

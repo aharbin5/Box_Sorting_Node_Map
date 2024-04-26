@@ -188,9 +188,7 @@ fn main() {
     // Package list to add to while scanning shelves
     let mut packages: Vec<structs::BoxStruct> = vec![];
 
-    // Move robot to -8192 and wait 5s
-    let mut current_shelf: i32 = 1;
-    extra::goto_shelf(1, vertical_encoder);
+    let mut current_shelf = extra::goto_shelf(1, vertical_encoder);
 
     extra::move_horizontal(&mut main_tx, -8192);
     loop {
@@ -209,8 +207,7 @@ fn main() {
     // Initialize forklift_pwm and load a box in the current position
     extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder);
 
-    current_shelf = 0;
-    extra::goto_shelf(0, vertical_encoder);
+    current_shelf = extra::goto_shelf(0, vertical_encoder);
 
     extra::move_horizontal(&main_tx, 0);
 
