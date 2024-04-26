@@ -2,6 +2,7 @@ use std::net::TcpListener;
 use std::io::Read;
 use local_ip_address::local_ip;
 use rppal::pwm::Pwm;
+use rppal::pwm::*;
 use rppal::gpio::Gpio;
 use serde_json::Value;
 use barcode_scanner::BarcodeScanner;
@@ -9,30 +10,36 @@ use std::sync::mpsc;
 use std::time::Duration;
 use std::thread;
 use as5600::As5600;
+use linux_embedded_hal::I2cdev;
 
-pub fn goto_shelf(shelf_number: i32, encoder: As5600<I2cSlave<{error}, Xca9548a<{unknown}>, {unknown}>>) {
+use xca9548a::I2cSlave;
+use xca9548a::Xca9548a;
+
+pub fn goto_shelf(shelf_number: i32, encoder: As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) {
     const VERTICAL_DIRECTION: u8 = 15;
+    const VERTICAL_GPIO: u8 = 13;
 
-    let mut vertical_pwm = rppal::pwm::Pwm::with_frequency(Channel::Pwm1, 3200 as f64, 0.25, Polarity::Normal, false).unwrap();
-    let mut vertical_gpio = gpio.get(VERTICAL_DIRECTION).unwrap().into_output();
+    let gpio = Gpio::new().unwrap();
+    let mut vertical_pwm = gpio.get(VERTICAL_GPIO).unwrap().into_output();
+    let mut vertical_dir = gpio.get(VERTICAL_DIRECTION).unwrap().into_output();
 
     if shelf_number == 0 {
-        vertical_gpio.set_high();
-        vertical_pwm.enable();
+	vertical_dir.set_high();
+        let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
         thread::sleep(Duration::from_secs(2));
-        vertical_pwm.disable();
+        let _ = vertical_pwm.clear_pwm();
     } else if shelf_number == 1 {
-        vertical_gpio.set_low();
-        vertical_pwm.enable();
+        vertical_dir.set_low();
+        let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
         thread::sleep(Duration::from_secs(2));
-        vertical_pwm.disable();
+        let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
     }
 }
 
 pub fn move_horizontal(send_channel: &mpsc::Sender<[i32; 2]>, target_value: i32) {
     let _ = send_channel.send([0,2]); // Send enable
     thread::sleep(Duration::from_millis(10)); // Make sure the thread gets it
-    let _ = send_channel.send([4, -8192]); // Send target position
+    let _ = send_channel.send([4, target_value]); // Send target position
 }
 
 pub fn unload_box(forklift_pwm: &mut rppal::pwm::Pwm, forklift_gpio: &mut rppal::gpio::OutputPin) {
@@ -45,23 +52,39 @@ pub fn unload_box(forklift_pwm: &mut rppal::pwm::Pwm, forklift_gpio: &mut rppal:
      */
 }
 
-pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<{error}, Xca9548a<{unknown}>, {unknown}>>) {
-    forklift_pwm.set_low();
-    forklift_gpio.set_low();
+pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_dir: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) {
+    let _ = forklift_pwm.set_pwm_frequency(800 as f64, 0.0 as f64);
+    forklift_dir.set_low();
     // Low direction goes in the shelf
     // High direction comes out of the shelf
-    let initial_angle: i32 = encoder.angle().unwrap();
-    pwm_target(16384, initial_angle, forklift_pwm, forklift_gpio, encoder);
-    pwm_target(0, initial_angle, forklift_pwm, forklift_gpio, encoder);
+    
+    let mut initial_angle: i32;
+    match encoder.angle() {
+	Ok(t) => {
+		initial_angle = t as i32;
+		//const set_out: i32 = 16384;
+		pwm_target(16384, initial_angle, forklift_pwm, forklift_dir, encoder);
+    		pwm_target(0, initial_angle, forklift_pwm, forklift_dir, encoder);
+	},
+	Err(_e) => {println!("Could not get angle from the forklift encoder");}
+    }
 }
 
-fn pwm_target(target_position: i32, initial_angle: i32, forklift_pwm: &mut rppal::gpio::OutputPin, forklift_gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<{error}, Xca9548a<{unknown}>, {unknown}>>) {
+fn pwm_target(target_position: i32, initial_angle: i32, motor_pwm: &mut rppal::gpio::OutputPin, motor_gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) {
     let mut total_rotations: i32 = 0;
     let mut current_quadrant = 1;
     let mut previous_quadrant = 1;
 
+    let mut current_position: i32 = 0;
+
+    let _ = motor_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
+
     loop {
-        let raw_angle = encoder.angle();
+        let mut raw_angle: i32 = 0;
+	match encoder.angle() {
+		Ok(t) => {raw_angle = t as i32;},
+		Err(_e) => {panic!();}
+	}
 
         previous_quadrant = current_quadrant;
         current_quadrant = match raw_angle {
@@ -74,24 +97,21 @@ fn pwm_target(target_position: i32, initial_angle: i32, forklift_pwm: &mut rppal
         if previous_quadrant == 1 && current_quadrant == 2 {total_rotations -= 1;} 
         else if previous_quadrant == 2 && current_quadrant == 1 {total_rotations += 1;} 
         else if previous_quadrant == -1 || current_quadrant == -1 {
-            forklift_pwm.set_low();
-            break;
+            println!("Entered quadrant -1, breaking");
+            let _ = motor_pwm.clear_pwm();
+	    panic!();
         }
         current_position = (total_rotations * 4096) + raw_angle as i32 - initial_angle;
 
         if current_position < target_position + 50 && current_position > target_position - 50 {
             println!("hit target: current {} ~ target {}", current_position, target_position);
+            let _ = motor_pwm.clear_pwm();
             break;
         } else if current_position < target_position {
-            forklift_gpio.set_high();
+            let _ = motor_gpio.set_high();
         } else if current_position > target_position {
-            forklift_gpio.set_low();
+            let _ = motor_gpio.set_low();
         }
-
-        forklift_pwm.set_high();
-        thread::sleep(Duration::from_millis(20));
-        forklift_pwm.set_low();
-        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -101,10 +121,10 @@ fn read_barcode() -> String // Depricated
 	{
 		Ok(mut t) => {match t.read() {
 			Ok(t2) => {t2},
-			Err(e) => {"couldn't read".to_string()}
+			Err(_e) => {"couldn't read".to_string()}
 			}
 		},
-		Err(e) => {"could not find device".to_string()}
+		Err(_e) => {"could not find device".to_string()}
 	}
 }
 

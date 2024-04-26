@@ -10,20 +10,22 @@ use linux_embedded_hal::I2cdev;
 use embedded_hal::blocking::i2c::{Read, Write, WriteRead};
 use xca9548a::{Xca9548a, SlaveAddr};
 
-const HORIZONTAL_DIRECTION: u8 = 14;
-//const VERTICAL_DIRECTION: u8 = 15;
-const SPREADER_DIRECTION: u8 = 23;
-const FORKLIFT_DIRECTION: u8 = 24;
-
+const HORIZONTAL_PWM: u8 = 12;
+//const VERTICAL_PWM: u8 = 13; // This is initialized in extra.rs, no need to do it here
 const FORKLIFT_PWM_PIN: u8 = 5;
 const SPREADER_PWM_PIN: u8 = 6;
+
+const HORIZONTAL_DIRECTION: u8 = 14;
+//const VERTICAL_DIRECTION: u8 = 15; // This is initialized in extra.rs, no need to do it here
+const SPREADER_DIRECTION: u8 = 23;
+const FORKLIFT_DIRECTION: u8 = 24;
 
 use std::sync::mpsc;
 
 use as5600::As5600;
 
 fn main() {
-    let (main_tx, main_rx) = mpsc::channel();
+    let (mut main_tx, main_rx) = mpsc::channel();
     let (thread_tx, thread_rx) = mpsc::channel();
     let (scanner_tx, scanner_rx) = mpsc::channel::<String>();
     /* 
@@ -45,15 +47,18 @@ fn main() {
         1,0 - Error
     */
     let gpio = Gpio::new().unwrap();
-    let mut horizontal_gpio = gpio.get(HORIZONTAL_DIRECTION).unwrap().into_output();
-    //let mut vertical_gpio = gpio.get(VERTICAL_DIRECTION).unwrap().into_output();
-    let mut forklift_gpio = gpio.get(FORKLIFT_DIRECTION).unwrap().into_output();
-    let mut spreader_gpio = gpio.get(SPREADER_DIRECTION).unwrap().into_output();
-
+    
+    let mut horizontal_pwm = gpio.get(HORIZONTAL_PWM).unwrap().into_output();
+    //let mut vertical_pwn = gpio.get(VERTICAL_PWM).unwrap().into_output(); // This is initialized in extra.rs, no need to do it here
     let mut forklift_pwm = gpio.get(FORKLIFT_PWM_PIN).unwrap().into_output();
     let mut spreader_pwm = gpio.get(SPREADER_PWM_PIN).unwrap().into_output();
 
-    println!("All GPIO Pins 🗸");
+    let mut horizontal_gpio = gpio.get(HORIZONTAL_DIRECTION).unwrap().into_output();
+    //let mut vertical_gpio = gpio.get(VERTICAL_DIRECTION).unwrap().into_output(); // This is initialized in extra.rs, no need to do it here
+    let mut forklift_gpio = gpio.get(FORKLIFT_DIRECTION).unwrap().into_output();
+    let mut spreader_gpio = gpio.get(SPREADER_DIRECTION).unwrap().into_output();
+
+    println!("All GPIO & PWM pins initialized");
 
     let splitter = I2cdev::new("/dev/i2c-1").unwrap();
     let address = SlaveAddr::default();
@@ -64,32 +69,26 @@ fn main() {
     let forklift_i2c = parts.i2c1;
     let spreaders_i2c = parts.i2c2;
 
-    println!("Multiplexer 🗸");
+    println!("Multiplexer initialized");
 
     //let i2c = I2cdev::new("/dev/i2c-1").unwrap(); // set encoder on default bus
     let mut horizontal_encoder = As5600::new(I2cdev::new("/dev/i2c-0").unwrap());
-    println!("Horiztonal Encoder 🗸");
     //println!("Horizontal: {:?}", horizontal_encoder.config().unwrap());
 
     let mut vertical_encoder = As5600::new(vertical_i2c);
-    println!("Vertical Encoder 🗸");
     //println!("Vertical: {:?}", vertical_encoder.config().unwrap());
 
     let mut forklift_encoder = As5600::new(forklift_i2c);
-    println!("Forklift Encoder 🗸");
     //println!("Forklift: {:?}", forklift_encoder.config().unwrap());
 
     let mut spreaders_i2c = As5600::new(spreaders_i2c);
-    println!("Spreaders Encoder 🗸");
     //println!("Spreaders: {:?}", forklift_encoder.config().unwrap());
 
-    let mut total_rotations: i32 = 0;
-    let mut current_quadrant = 1;
-    let mut previous_quadrant = 1;
+    println!("Horizontal encoder initialized");
 
     let _ = main_tx.send([0,1]).unwrap();
 
-    let mut current_position: i32 = 0;
+    //let mut current_position: i32 = 0;
 
     // PWM Thread Init
     let pwm_thread = thread::spawn(move ||
@@ -98,7 +97,8 @@ fn main() {
         let mut current_quadrant = 1;
         let mut previous_quadrant = 1;
         let mut target_position: i32;
-        let pwm = rppal::pwm::Pwm::with_frequency(Channel::Pwm0, 3200 as f64, 0.25, Polarity::Normal, false).unwrap();
+	let mut current_position: i32 = 0;
+        // horizontal_pwm.set_pwm_frequency(freq: f64, duty: f64);
         println!("Horizontal thread spawned and pwm set false");
 
             let initial_angle: i32 = horizontal_encoder.angle().unwrap() as i32;
@@ -106,11 +106,11 @@ fn main() {
             loop {
             let status = main_rx.recv().unwrap();
             if status[0] == 0 && status[1] == 1 {
-                let _ = pwm.disable();
+                let _ = horizontal_pwm.clear_pwm();
                 println!("disabled for now");
             } 
             else if status[0] == 0 && status[1] == 2 {
-                let _ = pwm.enable();
+                let _ = horizontal_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
                 let target_position = main_rx.recv().unwrap()[1] - initial_angle; // Rx target position [1,?]
                 println!("enabled with target: {}", target_position);
                 loop {
@@ -128,32 +128,33 @@ fn main() {
                     else if previous_quadrant == 2 && current_quadrant == 1 {total_rotations += 1;} 
                     else if previous_quadrant == -1 || current_quadrant == -1 {
                         thread_tx.send([1,0]).unwrap();
-                       let _ = pwm.disable();
+                       let _ = horizontal_pwm.clear_pwm();
                         break;
                     }
                     current_position = (total_rotations * 4096) + raw_angle as i32 - initial_angle;
-                        //println!("{:?}\t|\t{:?}\tTotal Angle: {}", polar_angle, current_quadrant, current_position); // For  debugging, comment out in real run
+                    println!("{:?}\tTotal Angle: {}", current_quadrant, current_position); // For  debugging, comment out in real run
                     thread::sleep(Duration::from_millis(10));
+		    
+		    match scanner_rx.try_recv() {
+			Ok(t) => {println!("{} at {}", t, current_position);}, // Change this to send back to main later to be put in the actual boxmap
+			Err(_e) => {}
+		    }
                     if current_position < target_position + 50 && current_position > target_position - 50 {
                         println!("hit target: current {} ~ target {}", current_position, target_position);
-                        let _ = pwm.disable();
+                        let _ = horizontal_pwm.clear_pwm();
                         thread_tx.send([0,0]).unwrap(); // Success code
                         break;
                     } else if current_position < target_position {
                         horizontal_gpio.set_high();
-                        if !pwm.is_enabled().unwrap() {
-                            let _ = pwm.enable();
-                        }
+                        let _ = horizontal_gpio.set_pwm_frequency(3200 as f64, 0.5 as f64);
                     } else if current_position > target_position {
                         horizontal_gpio.set_low();
-                        if !pwm.is_enabled().unwrap() {
-                            let _ = pwm.enable();
-                        }
+                        let _ = horizontal_gpio.set_pwm_frequency(3200 as f64, 0.5 as f64);
                     }
                 }
             }
             else if status[0] == 0 && status[1] == 0 {
-                let _ = pwm.disable();
+                let _ = horizontal_gpio.clear_pwm();
                 println!("pwm disabled and killed");
                 break;
             }
@@ -175,11 +176,11 @@ fn main() {
 						_ => {println!("who knows what was scanned");}, // change later to be more useful
 					}
 					scanned_counter += 1;},
-                        	Err(e) => {println!("couldn't read"); scanned_counter = 100;}
+                        	Err(_e) => {println!("Barcode read did not return code and errored?"); scanned_counter = 100;}
                         	}
 			}
                 },
-                Err(e) => {println!("could not find device");}
+                Err(_e) => {println!("Could not find scanner");}
         }
     });
 
@@ -191,12 +192,14 @@ fn main() {
     scanner_thread.join().unwrap();*/
 
     // Move robot to -8192 and wait 5s
-    extra::move_horizontal(&main_tx, -8192);
+    extra::goto_shelf(1, vertical_encoder);
+
+    extra::move_horizontal(&mut main_tx, -8192);
     loop {
-        if thread_rx.recv()[0] == 1 {
+        if thread_rx.recv().unwrap()[0] == 1 {
             println!("Error code 1 from Horizontal, waiting 5s and retrying");
             thread::sleep(Duration::from_secs(5));
-            extra::move_horizontal(&main_tx, -8192);
+            extra::move_horizontal(&main_tx, -8192); // This is potentially unsafe if the initial_position gets reset
         }
         else {break;}
     }
@@ -204,7 +207,7 @@ fn main() {
     // Initialize forklift_pwm and load a box in the current position
     extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder);
 
-    extra::goto_shelf(1, vertical_encoder);
+    //extra::goto_shelf(1, vertical_encoder);
 
     println!("Sleeping 5s for safety");
     thread::sleep(Duration::from_secs(5));
@@ -212,26 +215,6 @@ fn main() {
     // Move robot to 0 and wait 1s
     extra::move_horizontal(&main_tx, 0);
     thread::sleep(Duration::from_secs(1));
-
-    /*// Stupid vibrate function
-    forklift_gpio.set_low();
-    let _ = forklift_pwm.enable();
-    thread::sleep(Duration::from_secs(1));
-    let mut counter = 0;
-    loop {
-	if counter > 75 {break;}
-        forklift_gpio.set_high();
-        thread::sleep(Duration::from_millis(20));
-        forklift_gpio.set_low();
-        thread::sleep(Duration::from_millis(20));
-	counter += 1;
-    }
-    let _ = forklift_pwm.disable();
-
-    forklift_gpio.set_high();
-    let _ = forklift_pwm.enable();
-    thread::sleep(Duration::from_secs(1));
-    let _ = forklift_pwm.disable();*/
 
     // Wrap things up by killing the thread
     println!("send kill");
