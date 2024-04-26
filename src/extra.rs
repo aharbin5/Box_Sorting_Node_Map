@@ -130,17 +130,16 @@ fn read_barcode() -> String // Depricated
 
 pub struct BoxStruct
 {
-    pub x_pos: u32,
-    pub y_pos: u32,
-    pub tracking_number: i64,
-    pub destination: i64
+    pub x_pos: i32,
+    pub y_pos: i32,
+    pub id: i32,
 }
 
 pub struct RouteStruct
 {
-    pub destination_id: i64,
-    pub x_pos: i64,
-    pub y_pos: i64
+    pub destination_id: i32,
+    pub x_pos: i32,
+    pub y_pos: i32
 }
 
 fn get_config() -> serde_json::Value {

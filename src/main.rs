@@ -25,9 +25,9 @@ use std::sync::mpsc;
 use as5600::As5600;
 
 fn main() {
-    let (mut main_tx, main_rx) = mpsc::channel();
-    let (thread_tx, thread_rx) = mpsc::channel();
-    let (scanner_tx, scanner_rx) = mpsc::channel::<String>();
+    let (mut main_tx, main_rx) = mpsc::channel(); // Used to tell the horizontal thread to do stuff
+    let (thread_tx, thread_rx) = mpsc::channel(); // Used to recieve stuff from the horizontal thread
+    let (scanner_tx, scanner_rx) = mpsc::channel(); // Used for the scanner thread and the horiztonal thread to talk
     /* 
         #### Main mpsc Status Guide ####
         Bit 0 - Code
@@ -37,7 +37,7 @@ fn main() {
         0,1 - disable pwm
         0,2 - enable pwm then wait for target
         0,3 - Send current encoder position
-        1,? - target message
+        1,{target_position} - target message
 
         #### Thread mpsc Status Guide ####
         Bit 0 - Code
@@ -45,6 +45,7 @@ fn main() {
 
         0,0 - Success
         1,0 - Error
+        {{package_id}, {position}} - Box location
     */
     let gpio = Gpio::new().unwrap();
     
@@ -136,7 +137,7 @@ fn main() {
                     thread::sleep(Duration::from_millis(10));
 		    
 		    match scanner_rx.try_recv() {
-			Ok(t) => {println!("{} at {}", t, current_position);}, // Change this to send back to main later to be put in the actual boxmap
+			Ok(t) => {println!("{} at {}", t, current_position); thread_tx.send([0,0]).unwrap();}, // Change this to send back to main later to be put in the actual boxmap
 			Err(_e) => {}
 		    }
                     if current_position < target_position + 50 && current_position > target_position - 50 {
@@ -168,15 +169,15 @@ fn main() {
 	match BarcodeScanner::open("/dev/input/by-id/usb-ADESSO_NuScan_1600U-event-kbd")
         {
                 Ok(mut t) => {
-			while scanned_counter < 10 {
+			loop {
 				match t.read() {
                        		Ok(t2) => {
-					match t2.parse::<i32>().unwrap() {
-						999..=8999 => {let _ = scanner_tx.send(t2).unwrap();},
-						_ => {println!("who knows what was scanned");}, // change later to be more useful
+					match t2.pop().parse::<i32>().unwrap() {
+						999..=8999 => {let _ = scanner_tx.send(t2.pop().parse::<i32>().unwrap());},
+						_ => {println!("Something weird was scanned, breaking"); break;},
 					}
 					scanned_counter += 1;},
-                        	Err(_e) => {println!("Barcode read did not return code and errored?"); scanned_counter = 100;}
+                        	Err(_e) => {println!("Barcode read did not return code and errored?"); break;}
                         	}
 			}
                 },
@@ -184,41 +185,39 @@ fn main() {
         }
     });
 
-    // This should be used for the real barcode scanner code, just saving it here for now
-    /*while let Ok(i) = scanner_rx.try_recv() {
-	    println!("{}", i);
-    }
-
-    scanner_thread.join().unwrap();*/
+    // Package list to add to while scanning shelves
+    let mut packages: Vec<structs::BoxStruct> = vec![];
 
     // Move robot to -8192 and wait 5s
+    let mut current_shelf: i32 = 1;
     extra::goto_shelf(1, vertical_encoder);
 
     extra::move_horizontal(&mut main_tx, -8192);
     loop {
-        if thread_rx.recv().unwrap()[0] == 1 {
-            println!("Error code 1 from Horizontal, waiting 5s and retrying");
-            thread::sleep(Duration::from_secs(5));
-            extra::move_horizontal(&main_tx, -8192); // This is potentially unsafe if the initial_position gets reset
+        let mut current_packet = thread_rx.recv().unwrap();
+        match current_packet[0] {
+            0 => {break;}
+            1 => {
+                println!("Error code 1 from Horizontal, waiting 5s and retrying");
+                thread::sleep(Duration::from_secs(5));
+                extra::move_horizontal(&main_tx, -8192);}, // This is potentially unsafe if the initial_position gets reset
+            999..=8999 => {packages.push(extra::BoxStruct{x_pos: current_packet[1], y_pos: current_shelf, id: current_packet[0]});},
+            _ => {println!("Horizontal thread sent something weird back?");},
         }
-        else {break;}
     }
 
     // Initialize forklift_pwm and load a box in the current position
     extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder);
 
-    //extra::goto_shelf(1, vertical_encoder);
+    current_shelf = 0;
+    extra::goto_shelf(0, vertical_encoder);
 
-    println!("Sleeping 5s for safety");
-    thread::sleep(Duration::from_secs(5));
-
-    // Move robot to 0 and wait 1s
     extra::move_horizontal(&main_tx, 0);
-    thread::sleep(Duration::from_secs(1));
 
     // Wrap things up by killing the thread
     println!("send kill");
     let _ = main_tx.send([0, 0]);
     pwm_thread.join().unwrap();
+    scanner_thread.join().unwrap();
     println!("Killed, Quitting"); 
 }
