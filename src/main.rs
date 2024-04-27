@@ -2,6 +2,7 @@ use std::error::Error;
 use std::thread;
 use std::time::Duration;
 use rppal::gpio::Gpio;
+use rppal::gpio::InputPin;
 use rppal::pwm::*;
 use barcode_scanner::BarcodeScanner;
 mod extra;
@@ -10,15 +11,20 @@ use linux_embedded_hal::I2cdev;
 use embedded_hal::blocking::i2c::{Read, Write, WriteRead};
 use xca9548a::{Xca9548a, SlaveAddr};
 
-const HORIZONTAL_PWM: u8 = 12;
+const HORIZONTAL_PWM_PIN: u8 = 12;
 //const VERTICAL_PWM: u8 = 13; // This is initialized in extra.rs, no need to do it here
 const FORKLIFT_PWM_PIN: u8 = 5;
 const SPREADER_PWM_PIN: u8 = 6;
 
-const HORIZONTAL_DIRECTION: u8 = 14;
-//const VERTICAL_DIRECTION: u8 = 15; // This is initialized in extra.rs, no need to do it here
-const SPREADER_DIRECTION: u8 = 23;
-const FORKLIFT_DIRECTION: u8 = 24;
+const HORIZONTAL_DIRECTION_PIN: u8 = 14;
+//const VERTICAL_DIRECTION_PIN: u8 = 15; // This is initialized in extra.rs, no need to do it here
+const SPREADER_DIRECTION_PIN: u8 = 23;
+const FORKLIFT_DIRECTION_PIN: u8 = 24;
+
+const DOOR_LIMIT_PIN: u8 = 4; // door limit (for safety)
+const HORIZONTAL_LIMIT_PIN: u8 = 17; // x right limit (pedestal)
+const VERTICAL_LIMIT_PIN: u8 = 27; // y bottom limit
+const FORKLIFT_LIMIT_PIN: u8 = 22; // forklift out limit
 
 use std::sync::mpsc;
 
@@ -38,6 +44,7 @@ fn main() {
         0,2 - enable pwm then wait for target
         0,3 - Send current encoder position
         1,{target_position} - target message
+        2,0 - Home horizontal
 
         #### Thread mpsc Status Guide ####
         Bit 0 - Code
@@ -49,15 +56,20 @@ fn main() {
     */
     let gpio = Gpio::new().unwrap();
     
-    let mut horizontal_pwm = gpio.get(HORIZONTAL_PWM).unwrap().into_output();
+    let mut horizontal_pwm = gpio.get(HORIZONTAL_PWM_PIN).unwrap().into_output();
     //let mut vertical_pwn = gpio.get(VERTICAL_PWM).unwrap().into_output(); // This is initialized in extra.rs, no need to do it here
     let mut forklift_pwm = gpio.get(FORKLIFT_PWM_PIN).unwrap().into_output();
     let mut spreader_pwm = gpio.get(SPREADER_PWM_PIN).unwrap().into_output();
 
-    let mut horizontal_gpio = gpio.get(HORIZONTAL_DIRECTION).unwrap().into_output();
-    //let mut vertical_gpio = gpio.get(VERTICAL_DIRECTION).unwrap().into_output(); // This is initialized in extra.rs, no need to do it here
-    let mut forklift_gpio = gpio.get(FORKLIFT_DIRECTION).unwrap().into_output();
-    let mut spreader_gpio = gpio.get(SPREADER_DIRECTION).unwrap().into_output();
+    let mut horizontal_gpio = gpio.get(HORIZONTAL_DIRECTION_PIN).unwrap().into_output();
+    //let mut vertical_gpio = gpio.get(VERTICAL_DIRECTION_PIN).unwrap().into_output(); // This is initialized in extra.rs, no need to do it here
+    let mut forklift_gpio = gpio.get(FORKLIFT_DIRECTION_PIN).unwrap().into_output();
+    let mut spreader_gpio = gpio.get(SPREADER_DIRECTION_PIN).unwrap().into_output();
+
+    let mut door_limit_sw = gpio.get(DOOR_LIMIT_PIN).unwrap().set_interrupt(Trigger::RisingEdge);
+    let mut horizontal_limit_sw = gpio.get(HORIZONTAL_LIMIT_PIN).unwrap().set_interrupt(Trigger::RisingEdge);
+    let mut vertical_limit_sw = gpio.get(VERTICAL_LIMIT_PIN).unwrap().set_interrupt(Trigger::RisingEdge);
+    let mut forklift_limit_sw = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().set_interrupt(Trigger::RisingEdge);
 
     println!("All GPIO & PWM pins initialized");
 
@@ -98,43 +110,53 @@ fn main() {
         let mut current_quadrant = 1;
         let mut previous_quadrant = 1;
         let mut target_position: i32;
-	let mut current_position: i32 = 0;
+        let mut current_position: i32 = 0;
+
         // horizontal_pwm.set_pwm_frequency(freq: f64, duty: f64);
+
         println!("Horizontal thread spawned and pwm set false");
+        let _ = horizontal_pwm.clear_pwm();
 
-            let initial_angle: i32 = horizontal_encoder.angle().unwrap() as i32;
+        println!("Beginning the walk home");
+        horizontal_gpio.set_low();
+        horizontal_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
+        
+        horizontal_limit_sw.poll_interrupt(true, None);
+        horizontal_pwm.clear_pwm();
+        println!("Made it home, setting zero posiiton");
+        let mut initial_angle = horizontal_encoder.angle().unwrap() as i32;
 
+        loop {
+        let status = main_rx.recv().unwrap();
+        if status[0] == 0 && status[1] == 1 {
+            let _ = horizontal_pwm.clear_pwm();
+            println!("disabled for now");
+        } 
+        else if status[0] == 0 && status[1] == 2 {
+            let _ = horizontal_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
+            let target_position = main_rx.recv().unwrap()[1] - initial_angle; // Rx target position [1,?]
+            println!("enabled with target: {}", target_position);
             loop {
-            let status = main_rx.recv().unwrap();
-            if status[0] == 0 && status[1] == 1 {
-                let _ = horizontal_pwm.clear_pwm();
-                println!("disabled for now");
-            } 
-            else if status[0] == 0 && status[1] == 2 {
-                let _ = horizontal_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
-                let target_position = main_rx.recv().unwrap()[1] - initial_angle; // Rx target position [1,?]
-                println!("enabled with target: {}", target_position);
-                loop {
-                    let raw_angle = horizontal_encoder.angle().unwrap() as i32;
-                    //let polar_angle: f32 = ((raw_angle as f32 / 4096.0) * 360.0) as f32; // For display purposes ONLY
-                    previous_quadrant = current_quadrant;
-                    current_quadrant = match raw_angle {
-                            0 ..= 1024 => {1},
-                            1025 ..= 2048 => {4},
-                            2049 ..= 3072 => {3},
-                            3073 ..= 4096 => {2},
-                            _ => {println!("could not find quadrant"); -1} // Failure code
-                    };
-                    if previous_quadrant == 1 && current_quadrant == 2 {total_rotations -= 1;} 
-                    else if previous_quadrant == 2 && current_quadrant == 1 {total_rotations += 1;} 
-                    else if previous_quadrant == -1 || current_quadrant == -1 {
-                        thread_tx.send([1,0]).unwrap();
-                       let _ = horizontal_pwm.clear_pwm();
-                        break;
-                    }
-                    current_position = (total_rotations * 4096) + raw_angle as i32 - initial_angle;
-                    //println!("{:?}\tTotal Angle: {}", current_quadrant, current_position); // For  debugging, comment out in real run
-                    thread::sleep(Duration::from_millis(10));
+                let raw_angle = horizontal_encoder.angle().unwrap() as i32;
+                //let polar_angle: f32 = ((raw_angle as f32 / 4096.0) * 360.0) as f32; // For display purposes ONLY
+                previous_quadrant = current_quadrant;
+                current_quadrant = match raw_angle {
+                        0 ..= 1024 => {1},
+                        1025 ..= 2048 => {4},
+                        2049 ..= 3072 => {3},
+                        3073 ..= 4096 => {2},
+                        _ => {println!("could not find quadrant"); -1} // Failure code
+                };
+                if previous_quadrant == 1 && current_quadrant == 2 {total_rotations -= 1;} 
+                else if previous_quadrant == 2 && current_quadrant == 1 {total_rotations += 1;} 
+                else if previous_quadrant == -1 || current_quadrant == -1 {
+                    thread_tx.send([1,0]).unwrap();
+                    let _ = horizontal_pwm.clear_pwm();
+                    break;
+                }
+                current_position = (total_rotations * 4096) + raw_angle as i32 - initial_angle;
+                //println!("{:?}\tTotal Angle: {}", current_quadrant, current_position); // For  debugging, comment out in real run
+                thread::sleep(Duration::from_millis(10));
 		    
 		    match scanner_rx.try_recv() {
 			Ok(t) => {println!("{} at {}", t, current_position); thread_tx.send([0,0]).unwrap();}, // Change this to send back to main later to be put in the actual boxmap
@@ -158,6 +180,15 @@ fn main() {
                 let _ = horizontal_pwm.clear_pwm();
                 println!("pwm disabled and killed");
                 break;
+            } else if status[0] == 2 {
+                println!("Beginning the walk home");
+                horizontal_gpio.set_low();
+                horizontal_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
+                
+                horizontal_limit_sw.poll_interrupt(true, None);
+                horizontal_pwm.clear_pwm();
+                println!("Made it home, setting zero posiiton");
+                initial_angle = horizontal_encoder.angle().unwrap() as i32;
             }
         }
     });
