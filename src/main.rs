@@ -5,6 +5,7 @@ use rppal::gpio::Gpio;
 use rppal::gpio::InputPin;
 use rppal::pwm::*;
 use barcode_scanner::BarcodeScanner;
+use rppal::gpio::Trigger;
 mod extra;
 
 use linux_embedded_hal::I2cdev;
@@ -66,10 +67,14 @@ fn main() {
     let mut forklift_gpio = gpio.get(FORKLIFT_DIRECTION_PIN).unwrap().into_output();
     let mut spreader_gpio = gpio.get(SPREADER_DIRECTION_PIN).unwrap().into_output();
 
-    let mut door_limit_sw = gpio.get(DOOR_LIMIT_PIN).unwrap().set_interrupt(Trigger::RisingEdge);
-    let mut horizontal_limit_sw = gpio.get(HORIZONTAL_LIMIT_PIN).unwrap().set_interrupt(Trigger::RisingEdge);
-    let mut vertical_limit_sw = gpio.get(VERTICAL_LIMIT_PIN).unwrap().set_interrupt(Trigger::RisingEdge);
-    let mut forklift_limit_sw = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().set_interrupt(Trigger::RisingEdge);
+    let mut door_limit_sw: InputPin = gpio.get(DOOR_LIMIT_PIN).unwrap().into_input();
+    let _ = door_limit_sw.set_interrupt(Trigger::RisingEdge);
+    let mut horizontal_limit_sw: InputPin = gpio.get(HORIZONTAL_LIMIT_PIN).unwrap().into_input();
+    let _ = horizontal_limit_sw.set_interrupt(Trigger::RisingEdge);
+    let mut vertical_limit_sw: InputPin = gpio.get(VERTICAL_LIMIT_PIN).unwrap().into_input();
+    let _ = vertical_limit_sw.set_interrupt(Trigger::RisingEdge);
+    let mut forklift_limit_sw: InputPin = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().into_input();
+    let _ = forklift_limit_sw.set_interrupt(Trigger::RisingEdge);
 
     println!("All GPIO & PWM pins initialized");
 
@@ -118,21 +123,25 @@ fn main() {
         let _ = horizontal_pwm.clear_pwm();
 
         println!("Beginning the walk home");
-        horizontal_gpio.set_low();
-        horizontal_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
+        horizontal_gpio.set_high();
+        let _ = horizontal_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
         
-        horizontal_limit_sw.poll_interrupt(true, None);
-        horizontal_pwm.clear_pwm();
-        println!("Made it home, setting zero posiiton");
+        let _ = horizontal_limit_sw.poll_interrupt(true, None);
+        let _ = horizontal_pwm.clear_pwm();
+        println!("Made it home, setting zero posiiton and notifying main");
         let mut initial_angle = horizontal_encoder.angle().unwrap() as i32;
+	thread_tx.send([0,0]).unwrap();
+	let _ = scanner_rx.try_recv();
 
         loop {
         let status = main_rx.recv().unwrap();
         if status[0] == 0 && status[1] == 1 {
             let _ = horizontal_pwm.clear_pwm();
+	    let _ = scanner_rx.try_recv();
             println!("disabled for now");
         } 
         else if status[0] == 0 && status[1] == 2 {
+	    let _ = scanner_rx.try_recv();
             let _ = horizontal_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
             let target_position = main_rx.recv().unwrap()[1] - initial_angle; // Rx target position [1,?]
             println!("enabled with target: {}", target_position);
@@ -159,7 +168,7 @@ fn main() {
                 thread::sleep(Duration::from_millis(10));
 		    
 		    match scanner_rx.try_recv() {
-			Ok(t) => {println!("{} at {}", t, current_position); thread_tx.send([0,0]).unwrap();}, // Change this to send back to main later to be put in the actual boxmap
+			Ok(t) => {/*println!("{} at {}", t, current_position);*/ thread_tx.send([t,current_position]).unwrap();},
 			Err(_e) => {}
 		    }
                     if current_position < target_position + 50 && current_position > target_position - 50 {
@@ -183,10 +192,10 @@ fn main() {
             } else if status[0] == 2 {
                 println!("Beginning the walk home");
                 horizontal_gpio.set_low();
-                horizontal_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
+                let _ = horizontal_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
                 
-                horizontal_limit_sw.poll_interrupt(true, None);
-                horizontal_pwm.clear_pwm();
+                let _ = horizontal_limit_sw.poll_interrupt(true, None);
+                let _ = horizontal_pwm.clear_pwm();
                 println!("Made it home, setting zero posiiton");
                 initial_angle = horizontal_encoder.angle().unwrap() as i32;
             }
@@ -222,32 +231,72 @@ fn main() {
     let mut packages: Vec<extra::BoxStruct> = vec![];
 
     let mut current_shelf: i32 = 0;
-    current_shelf = extra::goto_shelf(1, &vertical_encoder);
+    //current_shelf = extra::goto_shelf(1, &vertical_encoder);
 
-    thread::sleep(Duration::from_secs(5));
+    //current_shelf = extra::goto_shelf(0, &vertical_encoder);
 
-    current_shelf = extra::goto_shelf(0, &vertical_encoder);
+    loop {
+        match thread_rx.recv().unwrap()[0] {
+                0 => {break;},
+                _ => {}
+        }
+    }    
 
-    extra::move_horizontal(&mut main_tx, -16384);
+    extra::move_horizontal(&mut main_tx, -32764);
     loop {
         let mut current_packet = thread_rx.recv().unwrap();
+	//println!("0:{}, 1:{}", current_packet[0], current_packet[1]);
         match current_packet[0] {
             0 => {break;}
             1 => {
                 println!("Error code 1 from Horizontal, waiting 5s and retrying");
                 thread::sleep(Duration::from_secs(5));
                 extra::move_horizontal(&main_tx, -8192);}, // This is potentially unsafe if the initial_position gets reset
-            999..=8999 => {packages.push(extra::BoxStruct{x_pos: current_packet[1], y_pos: current_shelf, id: current_packet[0]});},
+            999..=8999 => {packages.push(extra::BoxStruct{x_pos: current_packet[1], y_pos: current_shelf, id: current_packet[0]}); println!("{} at {}", current_packet[0], current_packet[1])},
             _ => {println!("Horizontal thread sent something weird back?");},
         }
     }
 
     // Initialize forklift_pwm and load a box in the current position
-    extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder);
+    //extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder);
 
     extra::move_horizontal(&main_tx, 0);
-
+    loop {
+        match thread_rx.recv().unwrap()[0] {
+                0 => {break;},
+                _ => {}
+        }
+    }
     // Wrap things up by killing the thread
+
+    // 4002, 4004, 6008
+
+    let mut counter = 0;
+    for boxes in &packages {
+	println!("c:{} -> {}", counter, boxes.id);
+	counter += 1;
+    }
+
+    extra::move_horizontal(&main_tx, packages[1].x_pos - 16348);
+    loop {
+	match thread_rx.recv().unwrap()[0] {
+		0 => {extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder); break;},
+		_ => {}
+	}
+    }
+
+    extra::move_horizontal(&main_tx, 0);
+    loop {
+        match thread_rx.recv().unwrap()[0] {
+                0 => {break;},
+                _ => {}
+        }
+
+    println!("Victory waiting 3s");
+    thread::sleep(Duration::from_secs(3));
+
+    }
+
     println!("send kill");
     let _ = main_tx.send([0, 0]);
     pwm_thread.join().unwrap();

@@ -26,13 +26,13 @@ pub fn goto_shelf(shelf_number: i32, encoder: &As5600<I2cSlave<'_, Xca9548a<I2cd
     if shelf_number == 0 {
 	vertical_dir.set_high();
         let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
-        thread::sleep(Duration::from_secs(6));
+        thread::sleep(Duration::from_secs(10));
         let _ = vertical_pwm.clear_pwm();
         0
     } else if shelf_number == 1 {
         vertical_dir.set_low();
         let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
-        thread::sleep(Duration::from_secs(6));
+        thread::sleep(Duration::from_secs(10));
         let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
         1
     } else {println!("not a valid shelf, yet"); -1}
