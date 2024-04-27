@@ -6,7 +6,9 @@ use rppal::gpio::InputPin;
 use rppal::pwm::*;
 use barcode_scanner::BarcodeScanner;
 use rppal::gpio::Trigger;
+use serde_json::Value;
 mod extra;
+mod gpio_interrupts;
 
 use linux_embedded_hal::I2cdev;
 use embedded_hal::blocking::i2c::{Read, Write, WriteRead};
@@ -24,12 +26,14 @@ const FORKLIFT_DIRECTION_PIN: u8 = 24;
 
 const DOOR_LIMIT_PIN: u8 = 4; // door limit (for safety)
 const HORIZONTAL_LIMIT_PIN: u8 = 17; // x right limit (pedestal)
-const VERTICAL_LIMIT_PIN: u8 = 27; // y bottom limit
+//const VERTICAL_LIMIT_PIN: u8 = 27; // y bottom limit
 const FORKLIFT_LIMIT_PIN: u8 = 22; // forklift out limit
 
 use std::sync::mpsc;
 
 use as5600::As5600;
+
+use crate::extra::get_config;
 
 fn main() {
     let (mut main_tx, main_rx) = mpsc::channel(); // Used to tell the horizontal thread to do stuff
@@ -68,11 +72,11 @@ fn main() {
     let mut spreader_gpio = gpio.get(SPREADER_DIRECTION_PIN).unwrap().into_output();
 
     let mut door_limit_sw: InputPin = gpio.get(DOOR_LIMIT_PIN).unwrap().into_input();
-    let _ = door_limit_sw.set_interrupt(Trigger::RisingEdge);
+    let _ = door_limit_sw.set_async_interrupt(Trigger::RisingEdge, something_is_wrong); // TODO: I don't know if I'm doing this right, check FIRST
     let mut horizontal_limit_sw: InputPin = gpio.get(HORIZONTAL_LIMIT_PIN).unwrap().into_input();
     let _ = horizontal_limit_sw.set_interrupt(Trigger::RisingEdge);
-    let mut vertical_limit_sw: InputPin = gpio.get(VERTICAL_LIMIT_PIN).unwrap().into_input();
-    let _ = vertical_limit_sw.set_interrupt(Trigger::RisingEdge);
+    //let mut vertical_limit_sw: InputPin = gpio.get(VERTICAL_LIMIT_PIN).unwrap().into_input();
+    //let _ = vertical_limit_sw.set_interrupt(Trigger::RisingEdge);
     let mut forklift_limit_sw: InputPin = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().into_input();
     let _ = forklift_limit_sw.set_interrupt(Trigger::RisingEdge);
 
@@ -130,8 +134,8 @@ fn main() {
         let _ = horizontal_pwm.clear_pwm();
         println!("Made it home, setting zero posiiton and notifying main");
         let mut initial_angle = horizontal_encoder.angle().unwrap() as i32;
-	thread_tx.send([0,0]).unwrap();
-	let _ = scanner_rx.try_recv();
+	    thread_tx.send([0,0]).unwrap();
+	    let _ = scanner_rx.try_recv();
 
         loop {
         let status = main_rx.recv().unwrap();
@@ -230,17 +234,11 @@ fn main() {
     // Package list to add to while scanning shelves
     let mut packages: Vec<extra::BoxStruct> = vec![];
 
-    let mut current_shelf: i32 = 0;
-    //current_shelf = extra::goto_shelf(1, &vertical_encoder);
+    let mut route: serde_json::Value = get_config();
+    //route["route"][i]["destination_id"].as_i64()
 
-    //current_shelf = extra::goto_shelf(0, &vertical_encoder);
-
-    loop {
-        match thread_rx.recv().unwrap()[0] {
-                0 => {break;},
-                _ => {}
-        }
-    }    
+    let mut current_shelf: i32 = extra::goto_shelf(0, &vertical_encoder);
+    //current_shelf = extra::goto_shelf(1, &vertical_encoder); 
 
     extra::move_horizontal(&mut main_tx, -32764);
     loop {
@@ -271,12 +269,10 @@ fn main() {
 
     // 4002, 4004, 6008
 
-    let mut counter = 0;
-    for boxes in &packages {
-	println!("c:{} -> {}", counter, boxes.id);
-	counter += 1;
+    for parcel in route["box_loc"] {
+        println!("{}", parcel["tracking_number"]);
     }
-
+    
     extra::move_horizontal(&main_tx, packages[1].x_pos - 16348);
     loop {
 	match thread_rx.recv().unwrap()[0] {
@@ -292,9 +288,8 @@ fn main() {
                 _ => {}
         }
 
-    println!("Victory waiting 3s");
-    thread::sleep(Duration::from_secs(3));
-
+        println!("Victory waiting 3s");
+        thread::sleep(Duration::from_secs(3));
     }
 
     println!("send kill");

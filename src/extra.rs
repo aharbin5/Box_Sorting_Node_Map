@@ -11,29 +11,34 @@ use std::time::Duration;
 use std::thread;
 use as5600::As5600;
 use linux_embedded_hal::I2cdev;
-
 use xca9548a::I2cSlave;
 use xca9548a::Xca9548a;
 
 pub fn goto_shelf(shelf_number: i32, encoder: &As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) -> i32 {
     const VERTICAL_DIRECTION: u8 = 15;
     const VERTICAL_GPIO: u8 = 13;
+    const VERTICAL_LIMIT_PIN: u8 = 27; // y bottom limit
 
     let gpio = Gpio::new().unwrap();
     let mut vertical_pwm = gpio.get(VERTICAL_GPIO).unwrap().into_output();
     let mut vertical_dir = gpio.get(VERTICAL_DIRECTION).unwrap().into_output();
 
+    let mut vertical_limit_sw: InputPin = gpio.get(VERTICAL_LIMIT_PIN).unwrap().into_input();
+    let _ = vertical_limit_sw.set_interrupt(Trigger::RisingEdge);
+
+    // Go to vertical limit switch
+    let _ = vertical_pwm.clear_pwm();
+    vertical_dir.set_high();
+    let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
+    let _ = vertical_limit_sw.poll_interrupt(true, None);
+    let _ = vertical_pwm.clear_pwm();
+    let mut initial_angle: i32 = encoder.angle().unwrap();
+
     if shelf_number == 0 {
-	vertical_dir.set_high();
-        let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
-        thread::sleep(Duration::from_secs(10));
-        let _ = vertical_pwm.clear_pwm();
+	    pwm_target(-1024, initial_angle, &mut vertical_pwm, &mut vertical_dir, &mut encoder);
         0
     } else if shelf_number == 1 {
-        vertical_dir.set_low();
-        let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
-        thread::sleep(Duration::from_secs(10));
-        let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
+        pwm_target(-16384, initial_angle, &mut vertical_pwm, &mut vertical_dir, &mut encoder);
         1
     } else {println!("not a valid shelf, yet"); -1}
 }
@@ -148,17 +153,12 @@ pub struct RouteStruct
     pub y_pos: i32
 }
 
-fn get_config() -> serde_json::Value {
-    let my_local_ip_address: String = "127.0.0.1".to_string();
-    match local_ip()
-    {
-        Ok(t) => {let my_local_ip_address = t.to_string(); println!("Local address: {}", my_local_ip_address)},
-        Err(_e) => {println!("Couldn't get ip address correctly, resorting to loopback");}
-    }
+pub fn get_config() -> serde_json::Value {
+    let my_local_ip_address: String = "192.168.10.10".to_string();
     
     let mut rx: String = "".to_string();
 
-    match TcpListener::bind("127.0.0.1".to_string() + ":48753")
+    match TcpListener::bind(my_local_ip_address + ":48753")
     {
         Ok(t) => {
             println!("Address binded, waiting for connection");
