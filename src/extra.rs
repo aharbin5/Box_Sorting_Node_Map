@@ -15,7 +15,7 @@ use linux_embedded_hal::I2cdev;
 use xca9548a::I2cSlave;
 use xca9548a::Xca9548a;
 
-pub fn goto_shelf(shelf_number: i32, encoder: As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) -> i32 {
+pub fn goto_shelf(shelf_number: i32, encoder: &As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) -> i32 {
     const VERTICAL_DIRECTION: u8 = 15;
     const VERTICAL_GPIO: u8 = 13;
 
@@ -25,15 +25,15 @@ pub fn goto_shelf(shelf_number: i32, encoder: As5600<I2cSlave<'_, Xca9548a<I2cde
 
     if shelf_number == 0 {
 	vertical_dir.set_high();
-        let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
-        thread::sleep(Duration::from_secs(2));
+        let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
+        thread::sleep(Duration::from_secs(6));
         let _ = vertical_pwm.clear_pwm();
         0
     } else if shelf_number == 1 {
         vertical_dir.set_low();
-        let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
-        thread::sleep(Duration::from_secs(2));
-        let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
+        let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
+        thread::sleep(Duration::from_secs(6));
+        let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
         1
     } else {println!("not a valid shelf, yet"); -1}
 }
@@ -65,8 +65,11 @@ pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_dir: &mut rp
 	Ok(t) => {
 		initial_angle = t as i32;
 		//const set_out: i32 = 16384;
-		pwm_target(16384, initial_angle, forklift_pwm, forklift_dir, encoder);
-    		pwm_target(0, initial_angle, forklift_pwm, forklift_dir, encoder);
+		pwm_target(-18432, initial_angle, forklift_pwm, forklift_dir, encoder);
+		match encoder.angle() {
+			Ok(t2) => {pwm_target(18432, t2 as i32, forklift_pwm, forklift_dir, encoder);},
+			Err(_e) => {println!("failed getting angle for return forklift"); panic!();}
+		}
 	},
 	Err(_e) => {println!("Could not get angle from the forklift encoder");}
     }
@@ -104,14 +107,15 @@ fn pwm_target(target_position: i32, initial_angle: i32, motor_pwm: &mut rppal::g
 	    panic!();
         }
         current_position = (total_rotations * 4096) + raw_angle as i32 - initial_angle;
+	//println!("{}", current_position);
 
         if current_position < target_position + 50 && current_position > target_position - 50 {
             println!("hit target: current {} ~ target {}", current_position, target_position);
             let _ = motor_pwm.clear_pwm();
             break;
-        } else if current_position < target_position {
-            let _ = motor_gpio.set_high();
         } else if current_position > target_position {
+            let _ = motor_gpio.set_high();
+        } else if current_position < target_position {
             let _ = motor_gpio.set_low();
         }
     }

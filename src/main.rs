@@ -133,7 +133,7 @@ fn main() {
                         break;
                     }
                     current_position = (total_rotations * 4096) + raw_angle as i32 - initial_angle;
-                    println!("{:?}\tTotal Angle: {}", current_quadrant, current_position); // For  debugging, comment out in real run
+                    //println!("{:?}\tTotal Angle: {}", current_quadrant, current_position); // For  debugging, comment out in real run
                     thread::sleep(Duration::from_millis(10));
 		    
 		    match scanner_rx.try_recv() {
@@ -147,15 +147,15 @@ fn main() {
                         break;
                     } else if current_position < target_position {
                         horizontal_gpio.set_high();
-                        let _ = horizontal_gpio.set_pwm_frequency(3200 as f64, 0.5 as f64);
+                        let _ = horizontal_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
                     } else if current_position > target_position {
                         horizontal_gpio.set_low();
-                        let _ = horizontal_gpio.set_pwm_frequency(3200 as f64, 0.5 as f64);
+                        let _ = horizontal_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
                     }
                 }
             }
             else if status[0] == 0 && status[1] == 0 {
-                let _ = horizontal_gpio.clear_pwm();
+                let _ = horizontal_pwm.clear_pwm();
                 println!("pwm disabled and killed");
                 break;
             }
@@ -173,9 +173,9 @@ fn main() {
 			loop {
 				match t.read() {
                     Ok(t2) => {
-                    let string_thing = t2.split_at(t2.len()-1)[0];
-					match t2.pop().parse::<i32>().unwrap() {
-						999..=8999 => {let _ = scanner_tx.send(t2.pop().parse::<i32>().unwrap());},
+                    let string_thing = t2.split_at(t2.len()-1).0.to_string();
+					match string_thing.parse::<i32>().unwrap() {
+						999..=8999 => {let _ = scanner_tx.send(string_thing.parse::<i32>().unwrap());},
 						_ => {println!("Something weird was scanned, breaking"); break;},
 					}
 					scanned_counter += 1;},
@@ -190,9 +190,14 @@ fn main() {
     // Package list to add to while scanning shelves
     let mut packages: Vec<extra::BoxStruct> = vec![];
 
-    let mut current_shelf = extra::goto_shelf(1, vertical_encoder);
+    let mut current_shelf: i32 = 0;
+    current_shelf = extra::goto_shelf(1, &vertical_encoder);
 
-    extra::move_horizontal(&mut main_tx, -8192);
+    thread::sleep(Duration::from_secs(5));
+
+    current_shelf = extra::goto_shelf(0, &vertical_encoder);
+
+    extra::move_horizontal(&mut main_tx, -16384);
     loop {
         let mut current_packet = thread_rx.recv().unwrap();
         match current_packet[0] {
@@ -208,8 +213,6 @@ fn main() {
 
     // Initialize forklift_pwm and load a box in the current position
     extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder);
-
-    current_shelf = extra::goto_shelf(0, vertical_encoder);
 
     extra::move_horizontal(&main_tx, 0);
 
