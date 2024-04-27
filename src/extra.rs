@@ -60,24 +60,27 @@ pub fn unload_box(forklift_pwm: &mut rppal::pwm::Pwm, forklift_gpio: &mut rppal:
 }
 
 pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_dir: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) {
-    let _ = forklift_pwm.set_pwm_frequency(800 as f64, 0.0 as f64);
+    const FORKLIFT_LIMIT_PIN: u8 = 22; // forklift out limit
+    
+    let _ = forklift_pwm.clear_pwm();
     forklift_dir.set_low();
+
+    let mut forklift_limit_sw: InputPin = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().into_input();
+    let _ = forklift_limit_sw.set_interrupt(Trigger::RisingEdge);
+
+    let _ = forklift_pwm.clear_pwm();
+    forklift_dir.set_high();
+    let _ = forklift_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
+    let _ = forklift_pwm.poll_interrupt(true, None);
+    let _ = forklift_pwm.clear_pwm();
+    forklift_dir.set_low();
+    let mut initial_angle: i32 = encoder.angle().unwrap();
+
     // Low direction goes in the shelf
     // High direction comes out of the shelf
     
-    let mut initial_angle: i32;
-    match encoder.angle() {
-	Ok(t) => {
-		initial_angle = t as i32;
-		//const set_out: i32 = 16384;
-		pwm_target(-18432, initial_angle, forklift_pwm, forklift_dir, encoder);
-		match encoder.angle() {
-			Ok(t2) => {pwm_target(18432, t2 as i32, forklift_pwm, forklift_dir, encoder);},
-			Err(_e) => {println!("failed getting angle for return forklift"); panic!();}
-		}
-	},
-	Err(_e) => {println!("Could not get angle from the forklift encoder");}
-    }
+    pwm_target(-18432, initial_angle, forklift_pwm, forklift_dir, encoder);
+    pwm_target(0, t2 as i32, forklift_pwm, forklift_dir, encoder);
 }
 
 fn pwm_target(target_position: i32, initial_angle: i32, motor_pwm: &mut rppal::gpio::OutputPin, motor_gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) {
