@@ -29,6 +29,8 @@ const HORIZONTAL_LIMIT_PIN: u8 = 17; // x right limit (pedestal)
 //const VERTICAL_LIMIT_PIN: u8 = 27; // y bottom limit
 const FORKLIFT_LIMIT_PIN: u8 = 22; // forklift out limit
 
+const UNIVERSAL_ENABLE_PIN: u8 = 25;
+
 use std::sync::mpsc;
 
 use as5600::As5600;
@@ -72,13 +74,16 @@ fn main() {
     let mut spreader_gpio = gpio.get(SPREADER_DIRECTION_PIN).unwrap().into_output();
 
     let mut door_limit_sw: InputPin = gpio.get(DOOR_LIMIT_PIN).unwrap().into_input();
-    let _ = door_limit_sw.set_async_interrupt(Trigger::RisingEdge, something_is_wrong); // TODO: I don't know if I'm doing this right, check FIRST
+    //let _ = door_limit_sw.set_async_interrupt(Trigger::RisingEdge, something_is_wrong); // TODO: I don't know if I'm doing this right, check FIRST
     let mut horizontal_limit_sw: InputPin = gpio.get(HORIZONTAL_LIMIT_PIN).unwrap().into_input();
     let _ = horizontal_limit_sw.set_interrupt(Trigger::RisingEdge);
     //let mut vertical_limit_sw: InputPin = gpio.get(VERTICAL_LIMIT_PIN).unwrap().into_input();
     //let _ = vertical_limit_sw.set_interrupt(Trigger::RisingEdge);
     let mut forklift_limit_sw: InputPin = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().into_input();
     let _ = forklift_limit_sw.set_interrupt(Trigger::RisingEdge);
+
+    let mut universal_enable = gpio.get(UNIVERSAL_ENABLE_PIN).unwrap().into_output();
+    universal_enable.set_low();
 
     println!("All GPIO & PWM pins initialized");
 
@@ -133,9 +138,14 @@ fn main() {
         let _ = horizontal_limit_sw.poll_interrupt(true, None);
         let _ = horizontal_pwm.clear_pwm();
         println!("Made it home, setting zero posiiton and notifying main");
-        let mut initial_angle = horizontal_encoder.angle().unwrap() as i32;
-	    thread_tx.send([0,0]).unwrap();
-	    let _ = scanner_rx.try_recv();
+        let mut initial_angle: i32;
+	match horizontal_encoder.angle() {
+		Ok(t) => {initial_angle = t as i32; /*println!("Horizontal Initial {}", initial_angle)*/},
+		Err(e) => {println!("Couldn't find horizontal encoder: {:?}", e); panic!();}
+	}
+	
+        thread_tx.send([0,0]).unwrap();
+	let _ = scanner_rx.try_recv();
 
         loop {
         let status = main_rx.recv().unwrap();
@@ -233,12 +243,22 @@ fn main() {
 
     // Package list to add to while scanning shelves
     let mut packages: Vec<extra::BoxStruct> = vec![];
+    let mut route: Vec<i32> = vec![];
+    
+    {
+        let mut temp_route: Value = extra::get_config();
+        //route["route"][i]["destination_id"].as_i64()
 
-    let mut route: serde_json::Value = get_config();
-    //route["route"][i]["destination_id"].as_i64()
+        println!("--- Rx'd Route ---");
+        for index in 0..temp_route["route"].as_array().unwrap().len() {
+            println!("Stop {}: {}", index, temp_route["route"][index]["tracking_number"]);
+	    route.push(temp_route["route"][index]["tracking_number"].as_number().unwrap().as_i64().unwrap() as i32);
+        }
+    }
 
-    let mut current_shelf: i32 = extra::goto_shelf(0, &vertical_encoder);
-    //current_shelf = extra::goto_shelf(1, &vertical_encoder); 
+    let mut current_shelf: i32 = 0;
+    //current_shelf = extra::goto_shelf(0, &mut vertical_encoder);
+    //current_shelf = extra::goto_shelf(1, &mut vertical_encoder); 
 
     extra::move_horizontal(&mut main_tx, -32764);
     loop {
@@ -255,9 +275,6 @@ fn main() {
         }
     }
 
-    // Initialize forklift_pwm and load a box in the current position
-    //extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder);
-
     extra::move_horizontal(&main_tx, 0);
     loop {
         match thread_rx.recv().unwrap()[0] {
@@ -265,15 +282,44 @@ fn main() {
                 _ => {}
         }
     }
-    // Wrap things up by killing the thread
-
-    // 4002, 4004, 6008
-
-    for parcel in route["box_loc"] {
-        println!("{}", parcel["tracking_number"]);
-    }
     
-    extra::move_horizontal(&main_tx, packages[1].x_pos - 16348);
+    for parcel_id in &route {
+	let mut found: bool = false;
+	for scanned_box in &packages {
+	    if scanned_box.id == *parcel_id {
+		println!("Found {} at {}, routing now", parcel_id, scanned_box.x_pos);
+		found = true;
+		extra::move_horizontal(&main_tx, scanned_box.x_pos - 16348);
+		loop {
+        	    match thread_rx.recv().unwrap()[0] {
+                	0 => {extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder); break;},
+                	_ => {}
+        	    }
+    		}
+
+		extra::move_horizontal(&main_tx, 0);
+		loop {
+                    match thread_rx.recv().unwrap()[0] {
+                        0 => {break;},
+                        _ => {}
+                    }
+                }
+
+		// unload_box(forklift_pwm: &mut rppal::pwm::Pwm, forklift_gpio: &mut rppal::gpio::OutputPin);
+		//extra::unload_box();
+
+		println!("{} delivered", parcel_id);
+	    }
+	}
+
+	if !found {
+	    println!("Package: {} found in route but not in shelf", parcel_id);
+	}
+
+	thread::sleep(Duration::from_secs(10));
+    }
+
+    /*extra::move_horizontal(&main_tx, packages[1].x_pos - 16348);
     loop {
 	match thread_rx.recv().unwrap()[0] {
 		0 => {extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder); break;},
@@ -290,8 +336,9 @@ fn main() {
 
         println!("Victory waiting 3s");
         thread::sleep(Duration::from_secs(3));
-    }
+    }*/
 
+    // Wrap things up and kill the threads
     println!("send kill");
     let _ = main_tx.send([0, 0]);
     pwm_thread.join().unwrap();

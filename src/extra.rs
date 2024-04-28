@@ -4,6 +4,8 @@ use local_ip_address::local_ip;
 use rppal::pwm::Pwm;
 use rppal::pwm::*;
 use rppal::gpio::Gpio;
+use rppal::gpio::InputPin;
+use rppal::gpio::Trigger;
 use serde_json::Value;
 use barcode_scanner::BarcodeScanner;
 use std::sync::mpsc;
@@ -14,7 +16,7 @@ use linux_embedded_hal::I2cdev;
 use xca9548a::I2cSlave;
 use xca9548a::Xca9548a;
 
-pub fn goto_shelf(shelf_number: i32, encoder: &As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) -> i32 {
+pub fn goto_shelf(shelf_number: i32, encoder: &mut As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) -> i32 {
     const VERTICAL_DIRECTION: u8 = 15;
     const VERTICAL_GPIO: u8 = 13;
     const VERTICAL_LIMIT_PIN: u8 = 27; // y bottom limit
@@ -32,13 +34,13 @@ pub fn goto_shelf(shelf_number: i32, encoder: &As5600<I2cSlave<'_, Xca9548a<I2cd
     let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
     let _ = vertical_limit_sw.poll_interrupt(true, None);
     let _ = vertical_pwm.clear_pwm();
-    let mut initial_angle: i32 = encoder.angle().unwrap();
+    let initial_angle: i32 = encoder.angle().unwrap() as i32;
 
     if shelf_number == 0 {
-	    pwm_target(-1024, initial_angle, &mut vertical_pwm, &mut vertical_dir, &mut encoder);
+	    pwm_target(-1024, initial_angle, &mut vertical_pwm, &mut vertical_dir, encoder);
         0
     } else if shelf_number == 1 {
-        pwm_target(-16384, initial_angle, &mut vertical_pwm, &mut vertical_dir, &mut encoder);
+        pwm_target(-16384, initial_angle, &mut vertical_pwm, &mut vertical_dir, encoder);
         1
     } else {println!("not a valid shelf, yet"); -1}
 }
@@ -65,22 +67,23 @@ pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_dir: &mut rp
     let _ = forklift_pwm.clear_pwm();
     forklift_dir.set_low();
 
+    let gpio = Gpio::new().unwrap();
     let mut forklift_limit_sw: InputPin = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().into_input();
     let _ = forklift_limit_sw.set_interrupt(Trigger::RisingEdge);
 
     let _ = forklift_pwm.clear_pwm();
     forklift_dir.set_high();
     let _ = forklift_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
-    let _ = forklift_pwm.poll_interrupt(true, None);
+    let _ = forklift_limit_sw.poll_interrupt(true, None);
     let _ = forklift_pwm.clear_pwm();
     forklift_dir.set_low();
-    let mut initial_angle: i32 = encoder.angle().unwrap();
+    let mut initial_angle: i32 = encoder.angle().unwrap() as i32;
 
     // Low direction goes in the shelf
     // High direction comes out of the shelf
     
     pwm_target(-18432, initial_angle, forklift_pwm, forklift_dir, encoder);
-    pwm_target(0, t2 as i32, forklift_pwm, forklift_dir, encoder);
+    pwm_target(0, initial_angle, forklift_pwm, forklift_dir, encoder);
 }
 
 fn pwm_target(target_position: i32, initial_angle: i32, motor_pwm: &mut rppal::gpio::OutputPin, motor_gpio: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) {
@@ -184,9 +187,9 @@ pub fn get_config() -> serde_json::Value {
         Err(e) => println!("Error occured at TCP Bind\n{}", e)
     }
 
-    match serde_json::from_str(&rx)
+    match serde_json::from_str::<serde_json::Value>(&rx)
     {
-        Ok(t) => {return t},
+        Ok(t) => {t},
         Err(e) => {println!("Error parsing JSON: {}", e); serde_json::from_str("error").unwrap()} // Semi-hack fix but it SHOULDN'T ever error.  Mint
     }
 }
