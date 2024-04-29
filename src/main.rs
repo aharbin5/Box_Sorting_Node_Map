@@ -6,6 +6,7 @@ use rppal::gpio::InputPin;
 use rppal::pwm::*;
 use barcode_scanner::BarcodeScanner;
 use rppal::gpio::Trigger;
+use rppal::gpio::Level;
 use serde_json::Value;
 mod extra;
 mod gpio_interrupts;
@@ -27,7 +28,7 @@ const FORKLIFT_DIRECTION_PIN: u8 = 24;
 const DOOR_LIMIT_PIN: u8 = 4; // door limit (for safety)
 const HORIZONTAL_LIMIT_PIN: u8 = 17; // x right limit (pedestal)
 //const VERTICAL_LIMIT_PIN: u8 = 27; // y bottom limit
-const FORKLIFT_LIMIT_PIN: u8 = 22; // forklift out limit
+//const FORKLIFT_LIMIT_PIN: u8 = 22; // forklift out limit
 
 const UNIVERSAL_ENABLE_PIN: u8 = 25;
 
@@ -38,6 +39,8 @@ use as5600::As5600;
 use crate::extra::get_config;
 
 fn main() {
+    println!("fuck you");
+
     let (mut main_tx, main_rx) = mpsc::channel(); // Used to tell the horizontal thread to do stuff
     let (thread_tx, thread_rx) = mpsc::channel(); // Used to recieve stuff from the horizontal thread
     let (scanner_tx, scanner_rx) = mpsc::channel(); // Used for the scanner thread and the horiztonal thread to talk
@@ -74,13 +77,13 @@ fn main() {
     let mut spreader_gpio = gpio.get(SPREADER_DIRECTION_PIN).unwrap().into_output();
 
     let mut door_limit_sw: InputPin = gpio.get(DOOR_LIMIT_PIN).unwrap().into_input();
-    //let _ = door_limit_sw.set_async_interrupt(Trigger::RisingEdge, something_is_wrong); // TODO: I don't know if I'm doing this right, check FIRST
+    let _ = door_limit_sw.set_async_interrupt(Trigger::RisingEdge, gpio_interrupts::something_is_wrong); // TODO: I don't know if I'm doing this right, check FIRST
     let mut horizontal_limit_sw: InputPin = gpio.get(HORIZONTAL_LIMIT_PIN).unwrap().into_input();
     let _ = horizontal_limit_sw.set_interrupt(Trigger::RisingEdge);
     //let mut vertical_limit_sw: InputPin = gpio.get(VERTICAL_LIMIT_PIN).unwrap().into_input();
     //let _ = vertical_limit_sw.set_interrupt(Trigger::RisingEdge);
-    let mut forklift_limit_sw: InputPin = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().into_input();
-    let _ = forklift_limit_sw.set_interrupt(Trigger::RisingEdge);
+    //let mut forklift_limit_sw: InputPin = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().into_input();
+    //let _ = forklift_limit_sw.set_interrupt(Trigger::RisingEdge);
 
     let mut universal_enable = gpio.get(UNIVERSAL_ENABLE_PIN).unwrap().into_output();
     universal_enable.set_low();
@@ -108,7 +111,7 @@ fn main() {
     let mut forklift_encoder = As5600::new(forklift_i2c);
     //println!("Forklift: {:?}", forklift_encoder.config().unwrap());
 
-    let mut spreaders_i2c = As5600::new(spreaders_i2c);
+    let mut spreaders_encoder = As5600::new(spreaders_i2c);
     //println!("Spreaders: {:?}", forklift_encoder.config().unwrap());
 
     println!("Horizontal encoder initialized");
@@ -131,18 +134,21 @@ fn main() {
         println!("Horizontal thread spawned and pwm set false");
         let _ = horizontal_pwm.clear_pwm();
 
-        println!("Beginning the walk home");
+        /*println!("Beginning the walk home");
         horizontal_gpio.set_high();
         let _ = horizontal_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
-        
-        let _ = horizontal_limit_sw.poll_interrupt(true, None);
+	println!("{:?}", horizontal_limit_sw.read());
+	let _ = horizontal_limit_sw.poll_interrupt(true, None);
         let _ = horizontal_pwm.clear_pwm();
+	println!("{:?}", horizontal_limit_sw.read());
         println!("Made it home, setting zero posiiton and notifying main");
         let mut initial_angle: i32;
 	match horizontal_encoder.angle() {
-		Ok(t) => {initial_angle = t as i32; /*println!("Horizontal Initial {}", initial_angle)*/},
+		Ok(t) => {initial_angle = t as i32; println!("Horizontal Initial {}", initial_angle)},
 		Err(e) => {println!("Couldn't find horizontal encoder: {:?}", e); panic!();}
-	}
+	}*/
+
+	let mut initial_angle: i32 = horizontal_encoder.angle().unwrap() as i32;
 	
         thread_tx.send([0,0]).unwrap();
 	let _ = scanner_rx.try_recv();
@@ -178,14 +184,14 @@ fn main() {
                     break;
                 }
                 current_position = (total_rotations * 4096) + raw_angle as i32 - initial_angle;
-                //println!("{:?}\tTotal Angle: {}", current_quadrant, current_position); // For  debugging, comment out in real run
+                println!("{:?}\tTotal Angle: {}", current_quadrant, current_position); // For  debugging, comment out in real run
                 thread::sleep(Duration::from_millis(10));
 		    
 		    match scanner_rx.try_recv() {
 			Ok(t) => {/*println!("{} at {}", t, current_position);*/ thread_tx.send([t,current_position]).unwrap();},
 			Err(_e) => {}
 		    }
-                    if current_position < target_position + 50 && current_position > target_position - 50 {
+                    if current_position < target_position + 20 && current_position > target_position - 20 {
                         println!("hit target: current {} ~ target {}", current_position, target_position);
                         let _ = horizontal_pwm.clear_pwm();
                         thread_tx.send([0,0]).unwrap(); // Success code
@@ -257,8 +263,16 @@ fn main() {
     }
 
     let mut current_shelf: i32 = 0;
+
     //current_shelf = extra::goto_shelf(0, &mut vertical_encoder);
-    //current_shelf = extra::goto_shelf(1, &mut vertical_encoder); 
+    //current_shelf = extra::goto_shelf(0, &mut vertical_encoder); 
+
+    //current_shelf = extra::goto_shelf(1, &mut vertical_encoder);
+
+    //println!("loading now");
+    //extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder);
+
+    //current_shelf = extra::goto_shelf(1, &mut vertical_encoder);
 
     extra::move_horizontal(&mut main_tx, -32764);
     loop {
@@ -300,7 +314,7 @@ fn main() {
 		extra::move_horizontal(&main_tx, 0);
 		loop {
                     match thread_rx.recv().unwrap()[0] {
-                        0 => {break;},
+                        0 => {extra::unload_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder, &mut vertical_encoder); break;},
                         _ => {}
                     }
                 }
@@ -319,24 +333,8 @@ fn main() {
 	thread::sleep(Duration::from_secs(10));
     }
 
-    /*extra::move_horizontal(&main_tx, packages[1].x_pos - 16348);
-    loop {
-	match thread_rx.recv().unwrap()[0] {
-		0 => {extra::load_box(&mut forklift_pwm, &mut forklift_gpio, &mut forklift_encoder); break;},
-		_ => {}
-	}
-    }
-
+    // Return "home"
     extra::move_horizontal(&main_tx, 0);
-    loop {
-        match thread_rx.recv().unwrap()[0] {
-                0 => {break;},
-                _ => {}
-        }
-
-        println!("Victory waiting 3s");
-        thread::sleep(Duration::from_secs(3));
-    }*/
 
     // Wrap things up and kill the threads
     println!("send kill");

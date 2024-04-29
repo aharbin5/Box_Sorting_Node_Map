@@ -29,19 +29,25 @@ pub fn goto_shelf(shelf_number: i32, encoder: &mut As5600<I2cSlave<'_, Xca9548a<
     let _ = vertical_limit_sw.set_interrupt(Trigger::RisingEdge);
 
     // Go to vertical limit switch
+/*
     let _ = vertical_pwm.clear_pwm();
-    vertical_dir.set_high();
-    let _ = vertical_pwm.set_pwm_frequency(3200 as f64, 0.5 as f64);
+    vertical_dir.set_low();
+    let _ = vertical_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
     let _ = vertical_limit_sw.poll_interrupt(true, None);
-    let _ = vertical_pwm.clear_pwm();
+    let _ = vertical_pwm.clear_pwm();*/
     let initial_angle: i32 = encoder.angle().unwrap() as i32;
+    println!("finished vert init");
+
 
     if shelf_number == 0 {
-	    pwm_target(-1024, initial_angle, &mut vertical_pwm, &mut vertical_dir, encoder);
+	    pwm_target(0, initial_angle, &mut vertical_pwm, &mut vertical_dir, encoder);
         0
     } else if shelf_number == 1 {
-        pwm_target(-16384, initial_angle, &mut vertical_pwm, &mut vertical_dir, encoder);
+        pwm_target(16384, initial_angle, &mut vertical_pwm, &mut vertical_dir, encoder);
         1
+    } else if shelf_number == 9 {
+    	pwm_target(4096, initial_angle, &mut vertical_pwm, &mut vertical_dir, encoder);
+	9
     } else {println!("not a valid shelf, yet"); -1}
 }
 
@@ -51,14 +57,28 @@ pub fn move_horizontal(send_channel: &mpsc::Sender<[i32; 2]>, target_value: i32)
     let _ = send_channel.send([4, target_value]); // Send target position
 }
 
-pub fn unload_box(forklift_pwm: &mut rppal::pwm::Pwm, forklift_gpio: &mut rppal::gpio::OutputPin) {
-    /*   
-        TODO
-        This function needs to home the robot to the pedestal
-        then move up so it goes over the lip then drops down
-        so it can pull off and leave the box
-        Can't do that until we make the pedestal
-     */
+pub fn unload_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_dir: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>, vertical_encoder: &mut As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) {
+    const FORKLIFT_LIMIT_PIN: u8 = 22; // Forklift out limit
+
+    let _ = forklift_pwm.clear_pwm();
+    forklift_dir.set_low();
+
+    let gpio = Gpio::new().unwrap();
+    let mut forklift_limit_sw: InputPin = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().into_input();
+    let _ = forklift_limit_sw.set_interrupt(Trigger::RisingEdge);
+/*
+    let _ = forklift_pwm.clear_pwm();
+    forklift_dir.set_high();
+    let _ = forklift_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
+    let _ = forklift_limit_sw.poll_interrupt(true, None);
+    let _ = forklift_pwm.clear_pwm();
+    forklift_dir.set_low();
+*/  let mut initial_angle: i32 = encoder.angle().unwrap() as i32;
+
+    goto_shelf(9, vertical_encoder);
+    pwm_target(-18432, initial_angle, forklift_pwm, forklift_dir, encoder);
+    goto_shelf(0, vertical_encoder);
+    pwm_target(0, initial_angle, forklift_pwm, forklift_dir, encoder);
 }
 
 pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_dir: &mut rppal::gpio::OutputPin, encoder: &mut As5600<I2cSlave<'_, Xca9548a<I2cdev>, I2cdev, >>) {
@@ -71,12 +91,12 @@ pub fn load_box(forklift_pwm: &mut rppal::gpio::OutputPin, forklift_dir: &mut rp
     let mut forklift_limit_sw: InputPin = gpio.get(FORKLIFT_LIMIT_PIN).unwrap().into_input();
     let _ = forklift_limit_sw.set_interrupt(Trigger::RisingEdge);
 
-    let _ = forklift_pwm.clear_pwm();
+    /*let _ = forklift_pwm.clear_pwm();
     forklift_dir.set_high();
     let _ = forklift_pwm.set_pwm_frequency(800 as f64, 0.5 as f64);
     let _ = forklift_limit_sw.poll_interrupt(true, None);
     let _ = forklift_pwm.clear_pwm();
-    forklift_dir.set_low();
+    forklift_dir.set_low();*/
     let mut initial_angle: i32 = encoder.angle().unwrap() as i32;
 
     // Low direction goes in the shelf
@@ -118,9 +138,9 @@ fn pwm_target(target_position: i32, initial_angle: i32, motor_pwm: &mut rppal::g
 	    panic!();
         }
         current_position = (total_rotations * 4096) + raw_angle as i32 - initial_angle;
-	//println!("{}", current_position);
+	println!("{}", current_position);
 
-        if current_position < target_position + 50 && current_position > target_position - 50 {
+        if current_position < target_position + 20 && current_position > target_position - 20 {
             println!("hit target: current {} ~ target {}", current_position, target_position);
             let _ = motor_pwm.clear_pwm();
             break;
